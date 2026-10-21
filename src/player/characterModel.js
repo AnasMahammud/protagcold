@@ -195,6 +195,7 @@ export class CharacterModel {
     if (c.accent) this.mats.accent.color.set(c.accent);
     for (const child of [...this.hatSlot.children]) disposeTree(child);
     this.hatSlot.clear();
+    this._matList = null; // material list changes with the hat
     const hat = HATS[c.hat];
     if (hat && hat.build) {
       const obj = hat.build(THREE, c);
@@ -247,8 +248,8 @@ export class CharacterModel {
 
   setIt(isIt, infected = false) {
     this.isIt = isIt;
-    this.itGroup.visible = isIt;
-    this.itRing.visible = isIt;
+    this.itGroup.visible = isIt && !this.cloakOn;
+    this.itRing.visible = isIt && !this.cloakOn;
     const col = infected ? '#7dff3d' : '#ff3b2f';
     this.itGroup.children.forEach((m) => m.material.color.set(col));
     this.itRing.material.color.set(col);
@@ -284,32 +285,86 @@ export class CharacterModel {
     if (this.stunStars) this.stunStars.visible = on;
   }
 
-  /** Translucent afterimage of the current pose (used by the perfect-dodge cinematic). */
-  createGhost(color = '#3df5ff') {
-    const g = this.body.clone(true);
-    const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.55, depthWrite: false, blending: THREE.AdditiveBlending });
-    mat.toneMapped = false;
-    g.traverse((o) => {
-      if (o.isMesh) {
-        o.material = mat;
-        o.castShadow = false;
-      }
-    });
-    g.position.copy(this.root.position);
-    g.userData.ghostMaterial = mat;
-    return g;
+  /** Every material on the body, hats included. */
+  _allMats() {
+    if (!this._matList) {
+      const set = new Set();
+      this.body.traverse((o) => {
+        if (o.isMesh) for (const m of Array.isArray(o.material) ? o.material : [o.material]) set.add(m);
+      });
+      this._matList = [...set];
+    }
+    return this._matList;
   }
 
   setGhost(ghost) {
     // eliminated players / spectators render translucent
     if (ghost === this.ghost) return;
     this.ghost = ghost;
-    for (const m of Object.values(this.mats)) {
-      m.transparent = ghost;
+    for (const m of this._allMats()) {
+      m.transparent = ghost || !!this.cloakOn;
       m.opacity = ghost ? 0.25 : 1;
       m.needsUpdate = true;
     }
     this.blob.visible = !ghost;
+  }
+
+  /** Cloak / hologram: alpha in 0..1, or null to turn it off. Hides name, IT marker and shadow. */
+  setCloak(alpha) {
+    const on = alpha != null;
+    if (on !== !!this.cloakOn) {
+      this.cloakOn = on;
+      for (const m of this._allMats()) {
+        m.transparent = on || this.ghost;
+        m.depthWrite = !on;
+        m.needsUpdate = true;
+        if (!on) m.opacity = this.ghost ? 0.25 : 1;
+      }
+      this.blob.visible = !on && !this.ghost;
+      this.itGroup.visible = !!this.isIt && !on;
+      this.itRing.visible = !!this.isIt && !on;
+      if (this.nameSprite) this.nameSprite.material.opacity = on ? 0 : 1;
+      this.body.traverse((o) => {
+        if (o.isMesh) {
+          if (on) {
+            o.userData.castSaved = o.castShadow;
+            o.castShadow = false;
+          } else if (o.userData.castSaved !== undefined) {
+            o.castShadow = o.userData.castSaved;
+          }
+        }
+      });
+    }
+    if (on) for (const m of this._allMats()) m.opacity = alpha;
+  }
+
+  /**
+   * The current pose baked into ONE world-space geometry (positions only). Afterimages use
+   * this: one draw call per ghost instead of ~25 cloned meshes.
+   */
+  bakePose() {
+    this.root.updateMatrixWorld(true);
+    const positions = [];
+    const indices = [];
+    const v = new THREE.Vector3();
+    let base = 0;
+    this.body.traverse((o) => {
+      if (!o.isMesh || !o.visible) return;
+      const g = o.geometry;
+      const pos = g.attributes.position;
+      for (let i = 0; i < pos.count; i++) {
+        v.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld);
+        positions.push(v.x, v.y, v.z);
+      }
+      if (g.index) for (let i = 0; i < g.index.count; i++) indices.push(base + g.index.getX(i));
+      else for (let i = 0; i < pos.count; i++) indices.push(base + i);
+      base += pos.count;
+    });
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geo.setIndex(indices);
+    geo.computeBoundingSphere();
+    return geo;
   }
 
   playEmote(id) {
@@ -393,6 +448,17 @@ export class CharacterModel {
       J.shoulderR.set(-0.3, 0, -1.0); J.elbowR.set(-0.6);
       J.ankleL.set(0.3); J.ankleR.set(0.3);
       lambda = 26;
+    } else if (st === MS.GRAPPLE) {
+      // zipping along the rope: both arms reaching for the hook, legs trailing behind
+      J.hips.set(0.35, 0, 0);
+      J.spine.set(0.25, 0, 0);
+      J.neck.set(-0.35); J.head.set(-0.1);
+      J.hipL.set(0.3, 0, 0.1); J.kneeL.set(0.6);
+      J.hipR.set(-0.4, 0, -0.1); J.kneeR.set(1.1);
+      J.shoulderR.set(-2.9, 0, -0.15); J.elbowR.set(-0.1);
+      J.shoulderL.set(-2.5, 0, 0.25); J.elbowL.set(-0.5);
+      J.ankleL.set(0.5); J.ankleR.set(0.4);
+      lambda = 18;
     } else if (!s.grounded) {
       const rising = s.vy > 1;
       const tuck = rising ? 1 : clamp(1 + s.vy / 10, 0, 1);

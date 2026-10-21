@@ -13,7 +13,7 @@ sys.path.insert(0, ROOT)
 
 from server import rules as R  # noqa: E402
 from server.config import CONFIG  # noqa: E402
-from server.progression import compute_xp  # noqa: E402
+from server.progression import compute_coins, compute_xp  # noqa: E402
 
 with open(os.path.join(ROOT, "tests", "shared", "rules_cases.json"), encoding="utf-8") as f:
     CASES = json.load(f)["cases"]
@@ -41,6 +41,12 @@ def run_case(case):
                 assert res["ok"] == exp["ok"], f"{where}: ok={res['ok']} reason={res['reason']}"
             if "reason" in exp:
                 assert res["reason"] == exp["reason"], f"{where}: reason={res['reason']}"
+            continue
+        if "collectCoin" in step:
+            got = R.collect_coin(state, step["collectCoin"])
+            exp = step.get("expect", {})
+            if "ok" in exp:
+                assert got == exp["ok"], f"{where}: collect={got}"
             continue
         if "leave" in step:
             R.remove_player(state, step["leave"])
@@ -75,6 +81,9 @@ def check(state, exp, where):
     if "itTime" in exp:
         for pid, v in exp["itTime"].items():
             assert abs(players[pid]["itTime"] - v) < 0.01, f"{where}: itTime[{pid}]={players[pid]['itTime']}"
+    if "coins" in exp:
+        for pid, n in exp["coins"].items():
+            assert players[pid]["coinsPicked"] == n, f"{where}: coins[{pid}]={players[pid]['coinsPicked']}"
     if "dodges" in exp:
         for pid, n in exp["dodges"].items():
             assert players[pid]["perfectDodges"] == n, f"{where}: dodges[{pid}]={players[pid]['perfectDodges']}"
@@ -87,6 +96,10 @@ def check(state, exp, where):
     if "ranking" in exp:
         got = [r["id"] for r in state["result"]["ranking"]]
         assert got == exp["ranking"], f"{where}: ranking={got}"
+    if "coinAward" in exp:
+        for pid, total in exp["coinAward"].items():
+            got = compute_coins(state["result"], pid, CONFIG["coins"])["coins"]
+            assert got == total, f"{where}: coins[{pid}]={got}"
     if "xp" in exp:
         for pid, total in exp["xp"].items():
             got = compute_xp(state["result"], pid, CONFIG["progression"])["total"]

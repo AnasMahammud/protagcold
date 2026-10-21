@@ -14,6 +14,8 @@ import { formatSeconds } from '../core/mathUtil.js';
 import { Hud, esc } from './hud.js';
 import { CharacterPreview } from './preview.js';
 import { friends } from '../multiplayer/friends.js';
+import { ABILITY_IDS, ABILITY_INFO } from '../gameplay/abilities.js';
+import { abilityIcon, COIN_SVG } from './abilityIcons.js';
 
 const MODE_INFO = () => {
   const m = getConfig().modes;
@@ -350,7 +352,9 @@ export class UI {
   _frame(dt) {
     const s = this.game.session;
     if (this.inMatch && s && !s.attract) {
-      this.hud.update(s.hudState(), { fps: this.game.fps, showLockHint: !this.paused && !this.touch.enabled && !this.input.pointerLocked && !s.ended && this.current === null });
+      const hs = s.hudState();
+      this.hud.update(hs, { fps: this.game.fps, showLockHint: !this.paused && !this.touch.enabled && !this.input.pointerLocked && !s.ended && this.current === null });
+      if (this.touch.enabled) this.touch.setCooldowns(hs.abilities);
       const rv = s.rulesView();
       if (rv.timeLeft !== Infinity && rv.phase === 'playing') audio.setMusicIntensity(rv.timeLeft < 30 ? 1 : rv.timeLeft < 70 ? 0.8 : 0.6);
     } else if (this.current) {
@@ -395,7 +399,7 @@ export class UI {
         return;
       }
       this.game.setSession(m);
-      this.net.send('loaded', { matchId: msg.matchId });
+      this.net.send('loaded', { matchId: msg.matchId, loadout: progression.loadout });
       this._enterMatch();
     } catch (err) {
       console.error(err);
@@ -406,12 +410,14 @@ export class UI {
   }
 
   _enterMatch() {
+    this.game.prewarmEffects();
     this.hideScreens();
     this.stack = [];
     this.paused = false;
     this.hud.show(true);
     this.input.gameplayActive = true;
     this.input.clearEdges();
+    this.touch.setAbilities(this.game.session?.local?.loadout || []);
     this.touch.setEnabled(this.touch.constructor.supported());
     this._envAudio(this.game.map.id, false);
     this.input.requestPointerLock();
@@ -867,6 +873,24 @@ export class UI {
       this.show('customise', { replace: true });
     },
     previewMode: (t) => this.preview?.setMode(t.dataset.mode),
+    buyAbility: (t) => {
+      const res = progression.buyAbility(t.dataset.id);
+      if (res.ok) {
+        audio.play('purchase');
+        this.toast(`${res.msg} Equipped abilities are used with ${describeCode(settings.data.controls.bindings.ability1?.[0])} / ${describeCode(settings.data.controls.bindings.ability2?.[0])}.`, 'good');
+      } else {
+        audio.play('error');
+        this.toast(res.msg, 'error');
+      }
+      this.show('abilities', { replace: true });
+      this.root.querySelector(`[data-card="${t.dataset.id}"]`)?.classList.add('just-bought');
+    },
+    equipAbility: (t) => {
+      const slot = Number(t.dataset.slot);
+      const id = t.dataset.id;
+      progression.equip(slot, progression.profile.abilities.loadout[slot] === id ? null : id);
+      this.show('abilities', { replace: true });
+    },
     resetProfile: () => {
       if (confirm('Reset your level, stats and unlocks? This cannot be undone.')) {
         progression.reset();
@@ -894,6 +918,7 @@ export class UI {
         <button class="btn menu-item primary" data-action="play"><span class="t">▶&nbsp; Play</span></button>
         <button class="btn menu-item" data-action="practice"><span class="t">Practice</span></button>
         <button class="btn menu-item" data-action="friendsScreen"><span class="t">Friends</span><span class="badge ready friends-online"></span></button>
+        <button class="btn menu-item" data-action="goto" data-target="abilities"><span class="t">Abilities</span><span class="coin-chip">${COIN_SVG}${progression.coins}</span></button>
         <button class="btn menu-item" data-action="goto" data-target="customise"><span class="t">Customise</span></button>
         <button class="btn menu-item" data-action="goto" data-target="profile"><span class="t">Profile</span></button>
         <button class="btn menu-item" data-action="goto" data-target="settings"><span class="t">Settings</span></button>
@@ -905,6 +930,7 @@ export class UI {
         <div class="row between"><div class="name">${esc(settings.data.player.name)}</div><div class="badge you">LVL ${p.level}</div></div>
         <div class="xpbar"><i style="width:${Math.round((p.xp / need) * 100)}%"></i></div>
         <div class="row between" style="margin-top:6px;font-size:12px;color:var(--muted)"><span>${p.xp} / ${need} XP</span><span>${p.stats.wins} wins · ${p.stats.tags} tags</span></div>
+        <div class="row between" style="margin-top:8px"><span class="coin-chip big">${COIN_SVG}${progression.coins}</span><span class="loadout-mini">${progression.loadout.map((id, i) => `<i title="${id ? ABILITY_INFO[id] && getConfig().abilities[id].name : 'Empty slot'}" style="--c:${id ? ABILITY_INFO[id].color : '#555'}">${id ? abilityIcon(id) : ''}<b>${i ? 'R' : 'F'}</b></i>`).join('')}</span></div>
       </div>
       <div class="version">PRO TAG v${VERSION} · ${esc(this.game.glInfo || '')}</div>
     </div>`;
@@ -1288,15 +1314,78 @@ export class UI {
               <div class="xp-lines" style="margin:10px 0">${m.award.parts.map(([k, v]) => `<div><span>${esc(k)}</span><b>+${v}</b></div>`).join('')}</div>
               <div class="row between" style="font-size:13px"><span>Level ${p.level}${m.prog.levelsGained ? ' <span class="badge ready">LEVEL UP</span>' : ''}</span><span style="color:var(--muted)">${p.xp}/${need}</span></div>
               <div class="xpbar"><i style="width:${Math.round((p.xp / need) * 100)}%"></i></div>
-              ${m.online ? '<div class="label" style="margin-top:10px;color:var(--dim)">XP awarded by the server</div>' : ''}
+              ${m.online ? '<div class="label" style="margin-top:10px;color:var(--dim)">XP and coins awarded by the server</div>' : ''}
+            </div>
+            <div class="panel">
+              <div class="row between"><div class="label">Coins earned</div><b class="coin-chip big">${COIN_SVG}+${m.award.coins || 0}</b></div>
+              <div class="xp-lines coin-lines" style="margin:10px 0">${(m.award.coinParts || []).map(([k, v]) => `<div><span>${esc(k)}</span><b>+${v}</b></div>`).join('')}</div>
+              <div class="row between" style="font-size:13px"><span>Balance: <b style="color:var(--sun)">${progression.coins}</b></span>${this._affordable() ? '<span class="badge host">Something new is affordable!</span>' : ''}</div>
             </div>
             <div class="stack">
               <button class="btn primary" data-action="rematch"><span class="t">${m.online ? 'Ready for rematch' : 'Rematch'}</span></button>
               ${m.online ? '<button class="btn" data-action="toLobby"><span class="t">Return to lobby</span></button>' : '<button class="btn" data-action="toPlayMenu"><span class="t">Change mode / arena</span></button>'}
+              ${m.online ? '' : '<button class="btn" data-action="goto" data-target="abilities"><span class="t">Ability shop</span></button>'}
               <button class="btn ghost" data-action="toMenu"><span class="t">Main menu</span></button>
             </div>
           </div>
         </div>
+      </div>
+    </div>`;
+  }
+
+  /** True when some locked ability is within the player's budget. */
+  _affordable() {
+    const A = getConfig().abilities;
+    return ABILITY_IDS.some((id) => !progression.owns(id) && A[id].price <= progression.coins);
+  }
+
+  screen_abilities() {
+    const A = getConfig().abilities;
+    const C = getConfig().coins;
+    const lo = progression.profile.abilities.loadout;
+    const keys = [0, 1].map((i) => describeCode(settings.data.controls.bindings[i ? 'ability2' : 'ability1']?.[0]));
+    const slot = (i) => {
+      const id = lo[i] && progression.owns(lo[i]) ? lo[i] : null;
+      return `<div class="ld-slot ${id ? '' : 'empty'}" style="--c:${id ? ABILITY_INFO[id].color : '#556'}"><span class="key">${esc(keys[i])}</span><div class="ico">${id ? abilityIcon(id) : ''}</div><div><div class="label">Slot ${i + 1}</div><b>${id ? esc(A[id].name) : 'Empty'}</b></div></div>`;
+    };
+    const stat = (id) => {
+      const a = A[id];
+      const bits = [`${a.cooldown}s cooldown`];
+      if (a.range) bits.push(`${a.range} m range`);
+      if (a.duration) bits.push(`${a.duration}s`);
+      if (a.radius) bits.push(`${a.radius} m radius`);
+      return bits.join(' · ');
+    };
+    const card = (id) => {
+      const a = A[id];
+      const info = ABILITY_INFO[id];
+      const owned = progression.owns(id);
+      const short = a.price - progression.coins;
+      const eq = lo.indexOf(id);
+      let actions;
+      if (!owned) {
+        actions = short > 0
+          ? `<button class="btn small" disabled><span class="t">${COIN_SVG} ${a.price} · need ${short} more</span></button>`
+          : `<button class="btn small primary" data-action="buyAbility" data-id="${id}"><span class="t">Unlock · ${COIN_SVG} ${a.price}</span></button>`;
+      } else {
+        actions = [0, 1].map((i) => `<button class="btn small ${eq === i ? 'on' : ''}" data-action="equipAbility" data-id="${id}" data-slot="${i}"><span class="t">${eq === i ? '✓ ' : ''}Slot ${i + 1} (${esc(keys[i])})</span></button>`).join('');
+      }
+      return `<div class="ab-card ${owned ? 'owned' : short > 0 ? 'locked' : 'buyable'} ${eq >= 0 ? 'equipped' : ''}" data-card="${id}" style="--c:${info.color}">
+        <div class="ab-top"><div class="ico">${abilityIcon(id)}</div><div><div class="name">${esc(a.name)}</div><div class="meta">${stat(id)}</div></div>${owned ? `<span class="badge ${eq >= 0 ? 'ready' : 'wait'}">${eq >= 0 ? `ON ${esc(keys[eq])}` : 'OWNED'}</span>` : ''}</div>
+        <p class="desc">${esc(info.desc)}</p>
+        <div class="row ab-actions">${actions}</div>
+      </div>`;
+    };
+    return `
+    <div class="screen center dim">
+      <button class="btn ghost small back-btn" data-action="back"><span class="t">← Back</span></button>
+      <div class="page" style="max-width:1080px">
+        <div class="row between shop-head">
+          <div><h2 class="title">Abilities</h2><p class="subtitle">Unlock abilities with coins and equip two. Earn coins every match: tags, survival, wins, perfect dodges (+${C.perPerfectDodge}) and the gold coins scattered around each arena (+${C.perPickup} each, mostly up high).</p></div>
+          <div class="coin-balance">${COIN_SVG}<b>${progression.coins}</b><span>coins</span></div>
+        </div>
+        <div class="loadout-bar">${slot(0)}${slot(1)}<p class="subtitle">Bots use abilities too (Normal: one, Hard: two). Online, the server checks every ability.</p></div>
+        <div class="ab-grid">${ABILITY_IDS.map(card).join('')}</div>
       </div>
     </div>`;
   }
@@ -1420,7 +1509,7 @@ export class UI {
     } else if (tab === 'graphics') {
       body = seg('graphics.quality', 'Quality preset', [['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['ultra', 'Ultra']], 'Shadows, bloom, particle budget, draw distance, resolution') + slider('graphics.renderScale', 'Resolution scale', 0.5, 1.5, 0.05, 'Rendering resolution relative to your screen') + seg('graphics.fpsLimit', 'Frame-rate limit', [[0, 'Off'], [30, '30'], [60, '60'], [120, '120'], [144, '144']]) + toggle('graphics.showFps', 'Show FPS counter') + `<div class="setting"><div>Fullscreen<span class="hint">Currently ${document.fullscreenElement ? 'fullscreen' : 'windowed'}</span></div><button class="btn small" data-action="fullscreen" style="justify-self:end"><span class="t">${document.fullscreenElement ? 'Exit fullscreen' : 'Go fullscreen'}</span></button></div>` + `<div class="setting"><div>VSync<span class="hint">Browsers always synchronise rendering to the display. Use the frame-rate limit above to cap FPS.</span></div><div style="justify-self:end;color:var(--muted)">Always on</div></div>` + `<p class="subtitle">Real-time lights and decoration density apply when the next arena loads; anti-aliasing applies after reloading the page.</p>`;
     } else if (tab === 'access') {
-      body = toggle('accessibility.reduceFlashing', 'Reduce flashing & shake', 'Disables screen flashes, danger vignette and camera shake') + slider('accessibility.hudScale', 'HUD scale', 0.75, 1.5, 0.05) + toggle('accessibility.largeText', 'Larger menu text') + `<p class="subtitle" style="margin-top:12px">The IT player is always shown with a shape (spinning crown-flame and ground ring), not just a colour, so it stays readable for colour-blind players.</p>`;
+      body = toggle('accessibility.reduceFlashing', 'Reduce flashing & shake', 'Disables screen flashes, danger vignette and camera shake') + toggle('accessibility.dodgeAssist', 'Perfect-dodge assist', 'Flashes NOW! inside the perfect-dodge window. Off = you time it from the shrinking ring alone') + slider('accessibility.hudScale', 'HUD scale', 0.75, 1.5, 0.05) + toggle('accessibility.largeText', 'Larger menu text') + `<p class="subtitle" style="margin-top:12px">The IT player is always shown with a shape (spinning crown-flame and ground ring), not just a colour, so it stays readable for colour-blind players.</p>`;
     } else if (tab === 'network') {
       body = `<div class="field"><label class="label" for="server-url">Game server address</label><input type="text" id="server-url" value="${esc(this.net.serverUrl)}" placeholder="${esc(this.net.defaultUrl())}" /><span class="hint" style="color:var(--dim);font-size:12px">Leave empty to use the server this page was loaded from. Example: ws://192.168.1.20:8080/ws</span></div>`;
     }
@@ -1454,6 +1543,7 @@ export class UI {
             <div class="cg"><span>Slide</span><span>${k('slide')}</span></div>
             <div class="cg"><span>Dodge</span><span>${k('dodge')}</span></div>
             <div class="cg"><span>Vault / climb</span><span>${k('vault')}</span></div>
+            <div class="cg"><span>Ability slot 1 / 2</span><span>${k('ability1')} ${k('ability2')}</span></div>
             <div class="cg"><span>Emotes</span><span>${k('emote1')} ${k('emote2')} ${k('emote3')}</span></div>
             <div class="cg"><span>Scoreboard</span><span>${k('scoreboard')}</span></div>
             <div class="cg"><span>Practice: swap IT</span><span>${k('swapIt')}</span></div>
@@ -1464,11 +1554,12 @@ export class UI {
             <div class="cg"><span>Jump</span><span>A / Cross</span></div>
             <div class="cg"><span>Slide</span><span>B / Circle or LT</span></div>
             <div class="cg"><span>Vault / climb</span><span>X / Square</span></div>
-            <div class="cg"><span>Sprint</span><span>RB / RT (hold) or L3</span></div>
+            <div class="cg"><span>Sprint</span><span>RB / R1 (hold) or L3</span></div>
             <div class="cg"><span>Dodge</span><span>LB / L1</span></div>
+            <div class="cg"><span>Ability slot 1 / 2</span><span>Y / Triangle · RT / R2</span></div>
             <div class="cg"><span>Emotes</span><span>D-pad ↑ ← →</span></div>
             <div class="cg"><span>Scoreboard</span><span>View / Select</span></div>
-            <div class="cg"><span>Practice: swap IT</span><span>Y / Triangle</span></div>
+            <div class="cg"><span>Practice: swap IT</span><span>D-pad ↓</span></div>
             <div class="cg"><span>Pause</span><span>Menu / Start</span></div>
             <div class="cg"><span>Menus</span><span>D-pad + A, B = back</span></div>
           </div>
@@ -1476,14 +1567,15 @@ export class UI {
             <div class="cg"><span>Move</span><span>Drag on the left half</span></div>
             <div class="cg"><span>Look</span><span>Drag on the right half</span></div>
             <div class="cg"><span>Sprint</span><span>Toggle button, or push the stick fully</span></div>
-            <div class="cg"><span>Jump · Slide · Dodge · Vault</span><span>On-screen buttons</span></div>
+            <div class="cg"><span>Jump · Slide · Dodge · Vault · Abilities</span><span>On-screen buttons</span></div>
             <div class="cg"><span>Pause</span><span>❚❚ top right</span></div>
             <h4 style="margin-top:16px">Movement tips</h4>
             <div class="cg"><span>Run into a low wall</span><span>Auto-vault</span></div>
             <div class="cg"><span>Jump at a ledge</span><span>Mantle up</span></div>
             <div class="cg"><span>Jump while touching a wall</span><span>Wall jump (×2)</span></div>
             <div class="cg"><span>Jump out of a slide</span><span>Keeps momentum</span></div>
-            <div class="cg"><span>Dodge as IT reaches you</span><span>PERFECT DODGE: slow-mo, IT stunned, 5 s speed boost</span></div>
+            <div class="cg"><span>Dodge the instant IT reaches you</span><span>PERFECT DODGE: slow-mo, IT stunned, 5 s speed boost (8 s cooldown)</span></div>
+            <div class="cg"><span>Grapple</span><span>Aim the crosshair until it turns into a green ring</span></div>
           </div>
         </div>
       </div>

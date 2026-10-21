@@ -8,6 +8,8 @@ import { MS } from '../movement/controller.js';
 import { Player } from '../player/player.js';
 import { formatTime } from '../core/mathUtil.js';
 import { progression } from '../progression/progression.js';
+import { AbilitySystem } from './abilities.js';
+import * as AFX from '../effects/abilityFx.js';
 
 export class MatchSession {
   constructor(game, opts) {
@@ -32,6 +34,10 @@ export class MatchSession {
     this.edges = { jumpPressed: false, slidePressed: false, dodgePressed: false, vaultPressed: false };
     this.timeScale = 1; // set by the perfect-dodge cinematic
     this.allowSlowmo = false; // only offline matches may slow the world down
+    this.online = false;
+    this.abilities = new AbilitySystem(this);
+    this.coins = null; // MapCoins, created by the subclass once the map is known
+    this.grappleTarget = null;
   }
 
   get world() {
@@ -95,6 +101,17 @@ export class MatchSession {
       else bus.emit('hud:feed', { kind: 'info', text: 'That emote is still locked (see Customise)' });
     }
     if (canControl && cmd.swapItPressed) this.onSwapIt?.();
+    // abilities: aim with the camera (grapple uses the crosshair ray)
+    if (local && local.loadout?.some(Boolean)) {
+      this.grappleTarget = local.loadout.includes('grapple') && canControl ? this.findGrappleTarget(local) : null;
+      if (canControl && (cmd.ability1Pressed || cmd.ability2Pressed) && this.rulesView().phase === 'playing') {
+        const slot = cmd.ability1Pressed ? 0 : 1;
+        const f = this.game.cameraRig.forward();
+        const mv = this.mapInput(cmd);
+        const look = this.game.camera.getWorldDirection(this._lookV || (this._lookV = this.game.camera.position.clone()));
+        this.abilities.use(local, slot, { move: { x: mv.mx, z: mv.mz }, look: { x: look.x, y: look.y, z: look.z, fx: f.x, fz: f.z }, anchor: this.grappleTarget });
+      }
+    }
     if (local?.out && !this.inputBlocked && !this.paused && (cmd.jumpPressed || cmd.vaultPressed)) this.cycleSpectate(1);
 
     // fixed-step simulation. Edge-triggered presses accumulate until a sim step consumes them,
@@ -119,6 +136,10 @@ export class MatchSession {
     }
     const alpha = this.paused ? 1 : this.acc / this.step;
     this.renderPlayers(dt, time, alpha);
+    this.abilities.render(dt, time);
+    AFX.update(dt);
+    AFX.tickTrails(this, dt);
+    this.coins?.render(dt, time);
     this.updateCamera(dt, time);
   }
 
@@ -170,6 +191,14 @@ export class MatchSession {
           break;
         case 'fell':
           this.onFell?.(p);
+          break;
+        case 'knocked':
+          audio.play('knocked', { pos, ownerId: p.id });
+          fx.burst({ x: pos.x, y: pos.y + 1, z: pos.z }, '#ff3df0', { count: 12, speed: 3, size: 0.16, life: 0.35, up: 1 });
+          if (p.id === this.localId) this.game.cameraRig.shake(0.3);
+          break;
+        case 'grapple_end':
+          if (p.id === this.localId) fx.dust(pos, 0.5);
           break;
         default:
           break;
@@ -347,7 +376,8 @@ export class MatchSession {
     let arrow = null;
     if (local && !local.out && rv.phase === 'playing') {
       // directional indicator: runners see the nearest IT; IT sees the nearest runner within 30m
-      const pool = local.it ? runners : its;
+      // cloaked players don't show up on the arrow (that's what the cloak is for)
+      const pool = (local.it ? runners : its).filter((p) => !this.abilities.isCloaked(p));
       let best = null;
       let bd = local.it ? 30 : Infinity;
       for (const p of pool) {
@@ -392,6 +422,16 @@ export class MatchSession {
       arrow,
       scoreboard: this.scoreboardHeld ? rv.scoreboard : null,
       net: this.netStatus?.() ?? null,
+      abilities: (local?.loadout || []).map((id, i) => (id ? {
+        id,
+        key: describeCode(settings.data.controls.bindings[i ? 'ability2' : 'ability1']?.[0]),
+        cd: this.abilities.cooldown(local, id),
+        max: this.cfg.abilities[id].cooldown,
+      } : null)),
+      dodgeAssist: !!settings.data.accessibility.dodgeAssist,
+      grappleOk: !!this.grappleTarget,
+      cloaked: !!local && this.abilities.isCloaked(local),
+      coinsGrabbed: this.coins?.collected || 0,
     };
   }
 
@@ -429,7 +469,28 @@ export class MatchSession {
     return { phase: 'playing', countdown: 0, timeLeft: Infinity, scoreboard: [] };
   }
 
+  /** Crosshair ray for the grapple hook: a surface within range, or null. */
+  findGrappleTarget(local) {
+    const cam = this.game.camera;
+    const dir = cam.getWorldDirection(this._gV || (this._gV = cam.position.clone()));
+    const range = this.cfg.abilities.grapple.range;
+    const hit = this.world.raycast(cam.position.x, cam.position.y, cam.position.z, dir.x, dir.y, dir.z, range + this.game.cameraRig.dist + 2, true);
+    if (!hit) return null;
+    const p = { x: cam.position.x + dir.x * hit.t, y: cam.position.y + dir.y * hit.t, z: cam.position.z + dir.z * hit.t };
+    const c = local.ctrl.pos;
+    const d = Math.hypot(p.x - c.x, p.y - (c.y + 1), p.z - c.z);
+    if (d > range || d < 2.5) return null;
+    // back off the surface a little so we hang just in front of it
+    p.x -= dir.x * 0.4;
+    p.y -= dir.y * 0.4;
+    p.z -= dir.z * 0.4;
+    return p;
+  }
+
   dispose() {
+    this.abilities.dispose();
+    this.coins?.dispose();
+    AFX.clear();
     this.disposed = true;
     audio.stopAllLoops();
     for (const id of [...this.players.keys()]) this.removePlayer(id);

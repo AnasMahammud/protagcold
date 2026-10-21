@@ -1,5 +1,8 @@
 // Mobile touch controls: floating virtual joystick (left), camera drag zone (right) and
 // large action buttons. Enabled automatically on touch devices.
+import { abilityIcon } from './abilityIcons.js';
+import { ABILITY_INFO } from '../gameplay/abilities.js';
+
 export class TouchControls {
   constructor(root) {
     this.root = root;
@@ -9,7 +12,7 @@ export class TouchControls {
     this.lookX = 0;
     this.lookY = 0;
     this.sprint = false;
-    this.flags = { jumpPressed: false, slidePressed: false, dodgePressed: false, vaultPressed: false, pausePressed: false };
+    this.flags = { jumpPressed: false, slidePressed: false, dodgePressed: false, vaultPressed: false, pausePressed: false, ability1Pressed: false, ability2Pressed: false };
     this.jumpHeld = false;
     this.moveTouch = null;
     this.lookTouch = null;
@@ -22,6 +25,8 @@ export class TouchControls {
       <button class="tbtn sprint" data-a="sprint">Sprint</button>
       <button class="tbtn dodge" data-a="dodge">Dodge</button>
       <button class="tbtn vault" data-a="vault">Vault</button>
+      <button class="tbtn ab1" data-a="ability1">A1</button>
+      <button class="tbtn ab2" data-a="ability2">A2</button>
       <button class="tbtn pause" data-a="pause">❚❚</button>`;
     this.stick = root.querySelector('.stick');
     this.knob = root.querySelector('.stick i');
@@ -39,7 +44,30 @@ export class TouchControls {
   setEnabled(v) {
     this.enabled = v;
     this.root.classList.toggle('hidden', !v);
+    document.body.classList.toggle('touch-ui', v);
     if (!v) this._reset();
+  }
+
+  /** Show the equipped ability icons on the A1/A2 buttons (hidden when a slot is empty). */
+  setAbilities(loadout) {
+    ['ab1', 'ab2'].forEach((cls, i) => {
+      const b = this.root.querySelector(`.tbtn.${cls}`);
+      const id = loadout[i];
+      b.classList.toggle('off', !id);
+      b.innerHTML = id ? `${abilityIcon(id)}<i class="cd"></i>` : '';
+      b.style.setProperty('--c', id ? ABILITY_INFO[id].color : '#fff');
+    });
+  }
+
+  setCooldowns(abs = []) {
+    ['ab1', 'ab2'].forEach((cls, i) => {
+      const a = abs[i];
+      if (!a) return;
+      const v = Math.round((a.cd > 0 ? a.cd / a.max : 0) * 100);
+      if (this[`_cd${i}`] === v) return;
+      this[`_cd${i}`] = v;
+      this.root.querySelector(`.tbtn.${cls}`)?.style.setProperty('--p', v);
+    });
   }
 
   _reset() {
@@ -135,6 +163,8 @@ export class TouchControls {
       slidePressed: this.flags.slidePressed,
       dodgePressed: this.flags.dodgePressed,
       vaultPressed: this.flags.vaultPressed,
+      ability1Pressed: this.flags.ability1Pressed,
+      ability2Pressed: this.flags.ability2Pressed,
       pausePressed: this.flags.pausePressed,
     };
     this.lookX = this.lookY = 0;

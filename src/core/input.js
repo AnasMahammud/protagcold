@@ -160,6 +160,8 @@ export class InputManager {
       pausePressed: this._action('pause', p),
       scoreboard: this._action('scoreboard', d),
       swapItPressed: this._action('swapIt', p),
+      ability1Pressed: this._action('ability1', p),
+      ability2Pressed: this._action('ability2', p),
       emote: this._action('emote1', p) ? 'wave' : this._action('emote2', p) ? 'dance' : this._action('emote3', p) ? 'flex' : null,
     };
 
@@ -186,10 +188,12 @@ export class InputManager {
       cmd.slidePressed ||= edge(1) || edge(6);
       cmd.vaultPressed ||= edge(2);
       cmd.dodgePressed ||= edge(4);
-      cmd.sprint ||= b(5) || b(7) || this.padSprintToggle;
+      cmd.sprint ||= b(5) || this.padSprintToggle;
+      cmd.ability1Pressed ||= edge(3); // Y / Triangle
+      cmd.ability2Pressed ||= edge(7); // RT / R2
       cmd.pausePressed ||= edge(9);
       cmd.scoreboard ||= b(8);
-      cmd.swapItPressed ||= edge(3);
+      cmd.swapItPressed ||= edge(13); // D-pad down
       if (edge(12)) cmd.emote = 'wave';
       if (edge(14)) cmd.emote = 'dance';
       if (edge(15)) cmd.emote = 'flex';
@@ -209,6 +213,8 @@ export class InputManager {
       cmd.slidePressed ||= t.slidePressed;
       cmd.dodgePressed ||= t.dodgePressed;
       cmd.vaultPressed ||= t.vaultPressed;
+      cmd.ability1Pressed ||= t.ability1Pressed;
+      cmd.ability2Pressed ||= t.ability2Pressed;
       cmd.pausePressed ||= t.pausePressed;
     }
 

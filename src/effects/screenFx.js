@@ -57,13 +57,17 @@ const ScreenFxShader = {
       vec2 toC = uCenter - uv;
       vec2 ca = (uv - uCenter) * uChroma * 0.035;
       vec3 col = vec3(0.0);
-      for (int i = 0; i < 8; i++) {
-        vec2 suv = uv + toC * (float(i) / 7.0) * uZoom * 0.14;
-        col.r += texture2D(tDiffuse, suv + ca).r;
-        col.g += texture2D(tDiffuse, suv).g;
-        col.b += texture2D(tDiffuse, suv - ca).b;
+      if (uZoom < 0.01) {
+        col = vec3(texture2D(tDiffuse, uv + ca).r, texture2D(tDiffuse, uv).g, texture2D(tDiffuse, uv - ca).b);
+      } else {
+        for (int i = 0; i < 6; i++) {
+          vec2 suv = uv + toC * (float(i) / 5.0) * uZoom * 0.14;
+          col.r += texture2D(tDiffuse, suv + ca).r;
+          col.g += texture2D(tDiffuse, suv).g;
+          col.b += texture2D(tDiffuse, suv - ca).b;
+        }
+        col /= 6.0;
       }
-      col /= 8.0;
       float lum = dot(col, vec3(0.299, 0.587, 0.114));
       col = mix(col, vec3(lum), uDesat);
       // photographic negative with an electric cyan/magenta grade

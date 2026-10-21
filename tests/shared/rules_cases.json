@@ -288,6 +288,11 @@
               "c": 230,
               "a": 140,
               "b": 45
+            },
+            "coinAward": {
+              "c": 58,
+              "a": 36,
+              "b": 16
             }
           }
         },
@@ -913,6 +918,147 @@
         {
           "expect": {
             "dodges": {
+              "c": 0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "perfect dodge has a cooldown: chaining them is not allowed",
+      "create": {
+        "mode": "infection",
+        "players": [
+          "a",
+          "b",
+          "c"
+        ],
+        "it": [
+          "a",
+          "c"
+        ],
+        "countdown": 0
+      },
+      "steps": [
+        {
+          "tick": 2.0
+        },
+        {
+          "perfectDodge": [
+            "a",
+            "b"
+          ],
+          "opts": {
+            "delay": 0,
+            "stun": 1.0,
+            "boost": 5,
+            "protect": 0,
+            "cooldown": 8
+          },
+          "expect": {
+            "ok": true
+          }
+        },
+        {
+          "perfectDodge": [
+            "c",
+            "b"
+          ],
+          "opts": {
+            "delay": 0,
+            "stun": 1.0,
+            "boost": 5,
+            "protect": 0,
+            "cooldown": 8
+          },
+          "expect": {
+            "ok": false,
+            "reason": "dodge_cooldown"
+          }
+        },
+        {
+          "tick": 8.1
+        },
+        {
+          "perfectDodge": [
+            "c",
+            "b"
+          ],
+          "opts": {
+            "delay": 0,
+            "stun": 1.0,
+            "boost": 5,
+            "protect": 0,
+            "cooldown": 8
+          },
+          "expect": {
+            "ok": true
+          }
+        },
+        {
+          "expect": {
+            "dodges": {
+              "b": 2
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "map coins: counted while playing, never during the countdown or for eliminated players",
+      "create": {
+        "mode": "elimination",
+        "players": [
+          "a",
+          "b",
+          "c"
+        ],
+        "it": [
+          "a"
+        ],
+        "countdown": 1
+      },
+      "steps": [
+        {
+          "collectCoin": "b",
+          "expect": {
+            "ok": false
+          }
+        },
+        {
+          "tick": 1.5
+        },
+        {
+          "collectCoin": "b",
+          "expect": {
+            "ok": true
+          }
+        },
+        {
+          "collectCoin": "b",
+          "expect": {
+            "ok": true
+          }
+        },
+        {
+          "tag": [
+            "a",
+            "c"
+          ],
+          "expect": {
+            "ok": true
+          }
+        },
+        {
+          "collectCoin": "c",
+          "expect": {
+            "ok": false
+          }
+        },
+        {
+          "expect": {
+            "coins": {
+              "b": 2,
               "c": 0
             }
           }

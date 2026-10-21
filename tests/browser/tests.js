@@ -7,7 +7,7 @@ import { CharacterController, MS } from '../../src/movement/controller.js';
 import * as R from '../../src/gameplay/rules.js';
 import { NavGraph, LINK } from '../../src/ai/navGraph.js';
 import { BotBrain } from '../../src/ai/bot.js';
-import { computeXp } from '../../src/progression/progression.js';
+import { computeXp, computeCoins } from '../../src/progression/progression.js';
 
 const out = document.getElementById('out');
 const results = [];
@@ -297,6 +297,11 @@ suite('Rules (shared cases, parity with server)', async () => {
           if ('reason' in e) expect(res.reason === e.reason, `${where}: reason=${res.reason}`);
           return;
         }
+        if (step.collectCoin) {
+          const got = R.collectCoin(st, step.collectCoin);
+          if (step.expect && 'ok' in step.expect) expect(got === step.expect.ok, `${where}: collect=${got}`);
+          return;
+        }
         if (step.leave) R.removePlayer(st, step.leave);
         if (step.protect) R.protect(st, step.protect);
         if (step.forceIt) R.forceIt(st, step.forceIt);
@@ -311,10 +316,12 @@ suite('Rules (shared cases, parity with server)', async () => {
         if (e.team) expect(st.result.team === e.team, `${where}: team`);
         if (e.tags) for (const [id, n] of Object.entries(e.tags)) expect(st.players[id].tags === n, `${where}: tags ${id}`);
         if (e.itTime) for (const [id, v] of Object.entries(e.itTime)) near(st.players[id].itTime, v, 0.01, `${where}: itTime ${id}`);
+        if (e.coins) for (const [id, n] of Object.entries(e.coins)) expect(st.players[id].coinsPicked === n, `${where}: coins ${id}`);
         if (e.dodges) for (const [id, n] of Object.entries(e.dodges)) expect(st.players[id].perfectDodges === n, `${where}: dodges ${id}`);
         if (e.boost) for (const [id, v] of Object.entries(e.boost)) near(Math.max(0, st.players[id].boostUntil - st.time), v, 0.01, `${where}: boost ${id}`);
         if ('tagCount' in e) expect(st.tagCount === e.tagCount, `${where}: tagCount=${st.tagCount}`);
         if (e.ranking) expect(JSON.stringify(st.result.ranking.map((r) => r.id)) === JSON.stringify(e.ranking), `${where}: ranking=${st.result.ranking.map((r) => r.id)}`);
+        if (e.coinAward) for (const [id, v] of Object.entries(e.coinAward)) expect(computeCoins(st.result, id, cfg.coins).coins === v, `${where}: coins ${id}=${computeCoins(st.result, id, cfg.coins).coins}`);
         if (e.xp) for (const [id, v] of Object.entries(e.xp)) expect(computeXp(st.result, id, cfg.progression).total === v, `${where}: xp ${id}=${computeXp(st.result, id, cfg.progression).total}`);
       });
     });
@@ -563,7 +570,7 @@ suite('Perfect dodge', () => {
       cameraRig: { cine: { orbit: 0, zoom: 0, roll: 0, fov: 0, lift: 0 }, shake() {} }, screenPoint: (p, out) => out.set(0.5, 0.5) };
     const dir = new PerfectDodgeDirector(fakeGame);
     const sess = { timeScale: 1, disposed: false };
-    const model = { createGhost: () => { const g = new THREE.Group(); g.userData.ghostMaterial = new THREE.MeshBasicMaterial(); return g; } };
+    const model = { bakePose: () => new THREE.BoxGeometry(0.5, 1.8, 0.5) };
     const dodger = { name: 'You', renderPos: { x: 0, y: 0, z: 0 }, model };
     const tagger = { name: 'IT', renderPos: { x: 1, y: 0, z: 0 }, model };
     dir.play({ session: sess, dodger, tagger, kind: 'hero', slowmo: true, duration: cfg.perfectDodge.animTime });
@@ -584,6 +591,208 @@ suite('Perfect dodge', () => {
   });
 });
 
+// --------------------------------------------------------------------------- abilities & coins
+const { validLoadout, ABILITY_IDS } = await import('../../src/gameplay/abilities.js');
+const insideSolid = (w, c) => !w.isFree(c.pos.x, c.pos.y + 0.3, c.pos.z, M.radius * 0.5, 0.55);
+
+/** A 2-bot training match that is already past its countdown. */
+function liveMatch(seed = 1, difficulty = 'normal') {
+  const game = stubGame('training');
+  const m = new LocalMatch(game, { mode: 'classic', mapId: 'training', bots: 2, difficulty, headless: true, seed }, game.map.nav);
+  m.setup();
+  for (let i = 0; i < 200; i++) m.simStep(DT, I());
+  const itP = [...m.players.values()].find((p) => p.it);
+  const runP = [...m.players.values()].find((p) => !p.it);
+  for (const p of m.players.values()) m.abilities.setLoadout(p, []);
+  return { m, itP, runP };
+}
+
+suite('Abilities & coins', () => {
+  test('blink teleports up to its range in the open', () => {
+    const c = ctrlAt(-30, 0, 0);
+    const r = c.blink(1, 0, cfg.abilities.blink.range);
+    expect(r, 'blinked');
+    near(c.pos.x - -30, cfg.abilities.blink.range, 0.26, 'blink distance');
+    expect(hasEvent(c, 'blink'), 'blink event');
+  });
+  test('blink stops in front of a wall — never through it', () => {
+    const c = ctrlAt(4, 0, 0); // tall wall at x = 10 .. 10.5
+    const r = c.blink(1, 0, cfg.abilities.blink.range);
+    expect(r && c.pos.x < 10 - M.radius + 0.01 && c.pos.x > 8.5, `stopped at x=${c.pos.x.toFixed(2)}`);
+    expect(!insideSolid(world, c), 'not inside the wall');
+    const d = ctrlAt(10 - M.radius - 0.02, 0, 0);
+    expect(d.blink(1, 0, 9) === null, 'no room = no blink');
+  });
+  test('rocket jump launches high (and works in the air)', () => {
+    const c = ctrlAt(-25, 0, -25, 0);
+    c.rocket(cfg.abilities.rocket.velocity, cfg.abilities.rocket.forward);
+    let top = 0;
+    run(c, 2.5, () => I(), (cc) => { top = Math.max(top, cc.pos.y); });
+    const v = cfg.abilities.rocket.velocity;
+    near(top, (v * v) / (2 * M.gravity), 0.35, 'apex');
+    expect(c.grounded && c.pos.z < -26, 'landed a little forward');
+  });
+  test('grapple zips to the anchor and lets go there', () => {
+    const c = ctrlAt(12, 0, 8, -Math.PI / 2);
+    const g = cfg.abilities.grapple;
+    expect(c.startGrapple({ x: 19.6, y: 2.9, z: 8 }, g.speed, g.maxTime), 'started');
+    expect(c.state === MS.GRAPPLE, 'grapple state');
+    let clip = false;
+    const n = run(c, 1.5, () => I(), (cc) => { if (insideSolid(world, cc)) clip = true; if (!cc.grapple) return false; });
+    expect(!c.grapple && n * DT < g.maxTime, `released after ${(n * DT).toFixed(2)} s`);
+    expect(c.pos.x > 17, `arrived (x=${c.pos.x.toFixed(2)})`);
+    expect(!clip, 'never inside geometry');
+  });
+  test('grapple: jump lets go early, a blocked line stops it', () => {
+    const g = cfg.abilities.grapple;
+    const c = ctrlAt(-30, 0, -30);
+    c.startGrapple({ x: -30, y: 8, z: 10 }, g.speed, g.maxTime);
+    run(c, 0.1, () => I());
+    c.step(I(0, 0, { jumpPressed: true }), DT);
+    expect(!c.grapple && c.vel.y >= 3.9, 'released with a hop');
+    const d = ctrlAt(6, 0, 0); // the tall wall is in the way of an anchor behind it
+    d.startGrapple({ x: 14, y: 2, z: 0 }, g.speed, g.maxTime);
+    const n = run(d, 1.5, () => I(), (cc) => (cc.grapple ? undefined : false));
+    expect(!d.grapple && n * DT < 0.7 && d.pos.x < 10, `stopped by the wall after ${(n * DT).toFixed(2)} s`);
+  });
+  test('shockwave knockback (offline): pushes away and up, only in range', () => {
+    const { m, itP, runP } = liveMatch(3);
+    itP.spawn(10, 0, 2, 0);
+    runP.spawn(10, 0, -1, 0);
+    m.abilities.setLoadout(itP, ['shockwave', null]);
+    expect(m.abilities.use(itP, 0, {}).ok, 'used');
+    expect(runP.ctrl.vel.z < -5 && runP.ctrl.vel.y > 3 && !runP.ctrl.grounded, `pushed (vz ${runP.ctrl.vel.z.toFixed(1)}, vy ${runP.ctrl.vel.y.toFixed(1)})`);
+    runP.spawn(10, 0, -12, 0);
+    m.abilities.setLoadout(itP, ['shockwave', null]);
+    m.abilities.use(itP, 0, {});
+    expect(Math.hypot(runP.ctrl.vel.x, runP.ctrl.vel.z) < 0.01, 'out of range: untouched');
+    m.dispose();
+  });
+  test('cooldowns, slots and cloak duration', () => {
+    const { m, runP } = liveMatch(4);
+    m.abilities.setLoadout(runP, [null, 'cloak']);
+    expect(m.abilities.use(runP, 0, {}).reason === 'empty', 'empty slot');
+    expect(m.abilities.use(runP, 1, {}).ok, 'cloak on');
+    expect(m.abilities.isCloaked(runP), 'cloaked');
+    expect(m.abilities.use(runP, 1, {}).reason === 'cooldown', 'on cooldown');
+    for (let t = 0; t < cfg.abilities.cloak.duration + 0.1; t += DT) m.abilities.step(DT);
+    expect(!m.abilities.isCloaked(runP), 'cloak wears off');
+    for (let t = 0; t < cfg.abilities.cloak.cooldown; t += DT) m.abilities.step(DT);
+    expect(m.abilities.use(runP, 1, {}).ok, 'ready again after the cooldown');
+    m.dispose();
+  });
+  test('decoy runs off as a hologram and pops when IT touches it', () => {
+    const { m, itP, runP } = liveMatch(5);
+    runP.spawn(0, 0, 8, 0);
+    itP.spawn(-20, 0, -15, 0);
+    m.abilities.setLoadout(runP, ['decoy', null]);
+    expect(m.abilities.use(runP, 0, { dir: { x: 1, z: 0 } }).ok, 'used');
+    const dcy = m.abilities.decoys[0];
+    for (let i = 0; i < 30; i++) m.abilities.step(DT);
+    expect(dcy.ctrl.pos.x > 2, `decoy ran (x=${dcy.ctrl.pos.x.toFixed(1)})`);
+    expect(m.abilities.perceivables()[0].decoy, 'bots perceive it as a runner');
+    itP.spawn(dcy.ctrl.pos.x + 0.5, dcy.ctrl.pos.y, dcy.ctrl.pos.z, 0);
+    m.abilities.step(DT);
+    expect(m.abilities.decoys.length === 0, 'popped');
+    m.dispose();
+  });
+  test('cloaked runners are invisible to bots beyond 3 m', () => {
+    const nav = navFor('training');
+    const ctrl = new CharacterController(maps.training.world, M);
+    ctrl.teleport(0, 0, -6);
+    const brain = new BotBrain({ id: 'bot', ctrl }, nav, cfg.bots.hard, 9);
+    const runner = { id: 'r', pos: { x: 0, y: 0, z: 2 }, vel: { x: 0, y: 0, z: 0 }, it: false, out: false, protected: false, frozen: false, cloaked: true };
+    const ctx = { world: maps.training.world, phase: 'playing', players: [{ id: 'bot', pos: ctrl.pos, vel: ctrl.vel, it: true, out: false, protected: false, frozen: false }, runner] };
+    for (let i = 0; i < 30; i++) brain.update(DT, ctx);
+    expect(!brain.known.has('r'), 'not noticed while cloaked');
+    runner.cloaked = false;
+    for (let i = 0; i < 30; i++) brain.update(DT, ctx);
+    expect(brain.known.has('r'), 'noticed once visible');
+  });
+  for (const id of Object.keys(maps)) {
+    test(`${id}: coin spots stand on walkable ground and bots can path to most`, () => {
+      const { data, world: w } = maps[id];
+      const spots = data.coinSpots || [];
+      expect(spots.length >= cfg.coins.mapCoins, `${spots.length} spots`);
+      const nav = navFor(id);
+      const from = nav.reachableFrom(nav.nearest(...data.spawns[0], 2).id);
+      let reach = 0;
+      for (const [x, y, z] of spots) {
+        const g = w.groundBelow(x, z, M.radius * 0.6, y - 0.85);
+        expect(g && Math.abs(g.y - (y - 0.9)) < 0.06, `coin ${x},${y},${z} not above ground`);
+        expect(w.isFree(x, y - 0.88, z, M.radius, M.height), `coin ${x},${y},${z} blocked`);
+        const n = nav.nearest(x, y - 0.9, z, 2.5);
+        if (n && from.has(n.id)) reach++;
+      }
+      expect(reach / spots.length >= 0.75, `only ${reach}/${spots.length} reachable by bots`);
+      current.note = `${spots.length} spots, ${reach} on the bot nav graph, ${spots.filter((s) => s[1] > 2).length} up high`;
+    });
+  }
+  test('offline coins: pickup counts, then respawns elsewhere', () => {
+    const { m, runP } = liveMatch(6);
+    const before = m.coins.coins.size;
+    expect(before === Math.min(cfg.coins.mapCoins, maps.training.data.coinSpots.length), `spawned ${before}`);
+    const c = [...m.coins.coins.values()][0];
+    runP.spawn(c.pos.x, c.pos.y - 0.9, c.pos.z, 0);
+    m.coins.step(DT);
+    expect(!m.coins.coins.has(c.id) && m.rules.players[runP.id].coinsPicked === 1, 'picked up');
+    for (let t = 0; t < cfg.coins.respawn + 0.1; t += DT) m.coins.step(DT);
+    expect(m.coins.coins.size === before, 'respawned');
+    m.dispose();
+  });
+  test('bots rarely land perfect dodges (human-like timing error)', () => {
+    // IT homes in on a fleeing bot at full speed; count how the approach ends
+    const tally = { perfect: 0, tag: 0, none: 0 };
+    const trials = 40;
+    for (let k = 0; k < trials; k++) {
+      const { m, itP, runP } = liveMatch(100 + k, k % 2 ? 'hard' : 'normal');
+      itP.spawn(10, 0, -1, 0);
+      runP.spawn(10, 0, -6, 0);
+      itP.ctrl.vel.z = -10;
+      itP.brain = { update: () => {
+        const dx = runP.ctrl.pos.x - itP.ctrl.pos.x, dz = runP.ctrl.pos.z - itP.ctrl.pos.z, d = Math.hypot(dx, dz) || 1;
+        return I(dx / d, dz / d, { sprint: true });
+      } };
+      let out = 'none';
+      const orig = m.feedback.bind(m);
+      m.feedback = (ev) => { if (out === 'none' && (ev.type === 'perfect_dodge' || ev.type === 'tag')) out = ev.type === 'tag' ? 'tag' : 'perfect'; orig(ev); };
+      for (let i = 0; i < 150; i++) m.simStep(DT, I());
+      tally[out]++;
+      m.dispose();
+    }
+    expect(tally.perfect + tally.tag >= trials * 0.7, `IT reached the bot (${JSON.stringify(tally)})`);
+    expect(tally.perfect / trials < 0.2, `too many perfect dodges (${JSON.stringify(tally)})`);
+    current.note = `${trials} charges: ${tally.perfect} perfect dodges, ${tally.tag} tags, ${tally.none} escapes`;
+  });
+  test('shop: buy with coins, auto-equip, positional slots, no double buy', async () => {
+    const { progression } = await import('../../src/progression/progression.js');
+    const saved = JSON.stringify(progression.profile);
+    try {
+      progression.init(cfg);
+      progression.profile.coins = 120;
+      progression.profile.abilities = { owned: [], loadout: [null, null] };
+      expect(!progression.buyAbility('rocket').ok && progression.coins === 120, 'cannot afford');
+      expect(progression.buyAbility('blink').ok && progression.coins === 120 - cfg.abilities.blink.price, 'bought');
+      expect(progression.loadout.join() === 'blink,', `auto-equipped in slot 1 (${progression.loadout})`);
+      expect(!progression.buyAbility('blink').ok, 'no double purchase');
+      progression.profile.coins = 1000;
+      progression.buyAbility('cloak');
+      expect(progression.loadout.join() === 'blink,cloak', 'second purchase fills slot 2');
+      progression.equip(1, 'blink');
+      expect(progression.loadout.join() === 'cloak,blink', `equipping swaps slots (${progression.loadout})`);
+      progression.equip(0, null);
+      expect(progression.loadout.join() === ',blink', 'slot cleared, R slot kept');
+      expect(!progression.equip(0, 'shockwave'), 'cannot equip what you do not own');
+      expect(validLoadout(['blink', 'blink', 'cloak']).join() === 'blink,', 'no duplicates / max 2');
+      expect(validLoadout(['nope', 'cloak']).join() === ',cloak', 'unknown ids dropped');
+      expect(ABILITY_IDS.every((id) => cfg.abilities[id]?.price > 0), 'every ability has a price');
+    } finally {
+      progression.profile = JSON.parse(saved);
+      progression.save();
+    }
+  });
+});
+
 // --------------------------------------------------------------------------- settings & UI
 suite('Settings & UI wiring', () => {
   test('settings persist to storage and survive a reload', async () => {
@@ -593,6 +802,16 @@ suite('Settings & UI wiring', () => {
     const raw = JSON.parse(localStorage.getItem('protag.settings'));
     expect(raw.audio.music === 0.37, 'written to localStorage');
     settings.set('audio.music', before);
+  });
+  test('key bindings: defaults never collide, old saves are migrated (F: Slide -> Ability 1)', async () => {
+    const { dedupeBindings, DEFAULT_BINDINGS } = await import('../../src/core/settings.js');
+    expect(!dedupeBindings(structuredClone(DEFAULT_BINDINGS)), 'one key per action in the defaults');
+    const old = { ...structuredClone(DEFAULT_BINDINGS), slide: ['KeyC', 'KeyF'] };
+    expect(dedupeBindings(old), 'collision detected');
+    expect(old.slide.join() === 'KeyC' && old.ability1.join() === 'KeyF', `slide ${old.slide}, ability1 ${old.ability1}`);
+    const only = { ...structuredClone(DEFAULT_BINDINGS), slide: ['KeyF'] };
+    dedupeBindings(only);
+    expect(only.slide.join() === 'KeyC', 'an action never ends up unbound');
   });
   test('every data-action in the UI has a handler', async () => {
     const src = await (await fetch('../../src/ui/ui.js')).text();

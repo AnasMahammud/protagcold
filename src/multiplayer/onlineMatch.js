@@ -8,6 +8,7 @@ import { bus } from '../core/events.js';
 import { audio } from '../audio/audio.js';
 import { progression } from '../progression/progression.js';
 import { reasonText } from '../gameplay/localMatch.js';
+import { MapCoins } from '../gameplay/coins.js';
 
 export class OnlineMatch extends MatchSession {
   static async create(game, net, start) {
@@ -31,6 +32,7 @@ export class OnlineMatch extends MatchSession {
     this.lastCount = null;
     this.offs = [];
     this.matchId = start.matchId;
+    this.online = true; // abilities: the server applies knockback and validates every use
   }
 
   setup(start) {
@@ -41,6 +43,10 @@ export class OnlineMatch extends MatchSession {
       p.spawn(s[0], s[1], s[2], s[3] || 0);
     }
     this.applyRules(this.rules);
+    if (this.local) this.abilities.setLoadout(this.local, progression.loadout);
+    // gold coins are owned by the server: we only mirror spawns / pickups
+    this.coins = new MapCoins(this, { authoritative: false });
+    for (const [id, x, y, z] of start.coins || []) this.coins.spawn(id, { x, y, z });
     if (this.local) this.game.cameraRig.snapBehind(this.local.ctrl.yaw);
     this.game.cameraRig.pivotInit = false;
     const on = (t, fn) => this.offs.push(bus.on(`net:${t}`, fn));
@@ -49,6 +55,20 @@ export class OnlineMatch extends MatchSession {
     on('event', (m) => this.onEvent(m.ev));
     on('correct', (m) => this.onCorrect(m));
     on('match_end', (m) => this.onMatchEnd(m));
+    on('ability', (m) => this.onRemoteAbility(m));
+    on('ability_denied', (m) => {
+      audio.play('abilityDenied');
+      bus.emit('hud:feed', { kind: 'info', text: `Server blocked ${this.cfg.abilities[m.id]?.name || 'ability'} (${String(m.reason).replace('_', ' ')})` });
+    });
+    on('impulse', (m) => {
+      const p = this.local;
+      if (!p || !Array.isArray(m.v)) return;
+      p.ctrl.applyImpulse(m.v[0], m.v[1], m.v[2]);
+      this.game.cameraRig.shake(0.35);
+    });
+    on('coin_taken', (m) => this.coins.take(m.id, m.by));
+    on('coin_spawn', (m) => this.coins.spawn(m.id, { x: m.p[0], y: m.p[1], z: m.p[2] }));
+    on('coin_denied', (m) => this.coins.pending.delete(m.id));
     on('emote', (m) => {
       const p = this.players.get(m.id);
       if (p && m.id !== this.localId) p.model.playEmote(m.e);
@@ -107,6 +127,32 @@ export class OnlineMatch extends MatchSession {
     this.feedback(ev);
   }
 
+  /** Our ability went off locally (prediction): tell the server, which validates and relays it. */
+  onAbilityUsed(p, id, data) {
+    if (p.id !== this.localId) return;
+    const v = (o) => [r3(o.x), r3(o.y), r3(o.z)];
+    const msg = { id };
+    if (data.to) msg.to = v(data.to);
+    if (data.anchor) msg.anchor = v(data.anchor);
+    if (data.dir) msg.dir = [r3(data.dir.x), r3(data.dir.z)];
+    this.net.send('ability', msg);
+  }
+
+  /** Someone else used an ability (already validated by the server): replay its effects. */
+  onRemoteAbility(m) {
+    const p = this.players.get(m.by);
+    if (!p || m.by === this.localId || !this.cfg.abilities[m.id]) return;
+    const d = m.data || {};
+    const o = (a) => (Array.isArray(a) ? { x: a[0], y: a[1], z: a[2] } : null);
+    this.abilities.execute(p, m.id, {
+      from: o(d.from),
+      to: o(d.to),
+      anchor: o(d.anchor),
+      pos: o(d.pos),
+      dir: Array.isArray(d.dir) ? { x: d.dir[0], z: d.dir[1] } : null,
+    }, true);
+  }
+
   onCorrect(m) {
     // the server rejected our movement (speed/teleport/solid check): snap back
     const p = this.local;
@@ -153,6 +199,8 @@ export class OnlineMatch extends MatchSession {
       if (p.ctrl.events.some((e) => e.type === 'dodge')) this.net.send('dodge', {});
       this.handleMoveEvents(p);
     }
+    this.abilities.step(dt);
+    if (phase === 'playing' && !this.ended) this.coins?.step(dt);
     // stream our state to the server for validation + relay
     this.sendT += dt;
     if (this.sendT >= this.sendInterval) {

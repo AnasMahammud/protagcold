@@ -70,9 +70,10 @@
 
   "perfectDodge": {
     "_comment": "Dodge just as IT is about to tag you: slow-motion cinematic, tagger stunned, you get a speed boost.",
-    "window": 0.24,
-    "nearMiss": 1.1,
-    "closingSpeed": 1.0,
+    "window": 0.14,
+    "nearMiss": 0.6,
+    "closingSpeed": 3.0,
+    "cooldown": 8.0,
     "netGrace": 0.12,
     "slowmo": 0.15,
     "animTime": 1.6,
@@ -81,6 +82,30 @@
     "boostTime": 5.0,
     "boostSpeed": 1.3,
     "protectTime": 1.5
+  },
+
+  "coins": {
+    "_comment": "Coins buy abilities. Earned every match and by grabbing gold coins around the map.",
+    "start": 100,
+    "perMatch": 15,
+    "perTag": 4,
+    "per10sSurvived": 1,
+    "win": 25,
+    "perPerfectDodge": 8,
+    "perPickup": 3,
+    "mapCoins": 10,
+    "pickupRadius": 1.3,
+    "respawn": 18
+  },
+
+  "abilities": {
+    "_comment": "Unlocked with coins in the Abilities shop; two can be equipped (F and R by default).",
+    "blink":     { "name": "Blink",       "price": 100, "cooldown": 9,  "range": 9 },
+    "rocket":    { "name": "Rocket Jump", "price": 200, "cooldown": 8,  "velocity": 17, "forward": 5 },
+    "decoy":     { "name": "Decoy",       "price": 250, "cooldown": 14, "duration": 4.5 },
+    "grapple":   { "name": "Grapple",     "price": 300, "cooldown": 10, "range": 24, "speed": 24, "maxTime": 1.4 },
+    "cloak":     { "name": "Cloak",       "price": 350, "cooldown": 18, "duration": 4 },
+    "shockwave": { "name": "Shockwave",   "price": 450, "cooldown": 16, "radius": 6, "force": 15, "lift": 7 }
   },
 
   "match": {
@@ -137,8 +162,8 @@
   },
 
   "bots": {
-    "easy":   { "reaction": 0.55, "repath": 1.2, "aimError": 2.5, "sprintUse": 0.35, "usesMoves": false, "predict": 0.0, "mistakeRate": 0.25, "speedFactor": 0.9, "perfectDodge": 0.0 },
-    "normal": { "reaction": 0.30, "repath": 0.7, "aimError": 1.2, "sprintUse": 0.7,  "usesMoves": true,  "predict": 0.35, "mistakeRate": 0.1, "speedFactor": 1.0, "perfectDodge": 0.25 },
-    "hard":   { "reaction": 0.16, "repath": 0.4, "aimError": 0.5, "sprintUse": 1.0,  "usesMoves": true,  "predict": 0.75, "mistakeRate": 0.04, "speedFactor": 1.0, "perfectDodge": 0.5 }
+    "easy":   { "reaction": 0.55, "repath": 1.2, "aimError": 2.5, "sprintUse": 0.35, "usesMoves": false, "predict": 0.0, "mistakeRate": 0.25, "speedFactor": 0.9, "perfectDodge": 0.0, "abilities": 0, "abilityUse": 0.0 },
+    "normal": { "reaction": 0.30, "repath": 0.7, "aimError": 1.2, "sprintUse": 0.7,  "usesMoves": true,  "predict": 0.35, "mistakeRate": 0.1, "speedFactor": 1.0, "perfectDodge": 0.06, "abilities": 1, "abilityUse": 0.35 },
+    "hard":   { "reaction": 0.16, "repath": 0.4, "aimError": 0.5, "sprintUse": 1.0,  "usesMoves": true,  "predict": 0.75, "mistakeRate": 0.04, "speedFactor": 1.0, "perfectDodge": 0.14, "abilities": 2, "abilityUse": 0.6 }
   }
 }

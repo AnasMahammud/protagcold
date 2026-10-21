@@ -10,6 +10,8 @@ import { DEFAULT_COSMETICS, HATS, TRAILS, TAG_EFFECTS, EMOTES, COLORS, isUnlocke
 
 const DEFAULT_PROFILE = {
   version: 1,
+  coins: null, // set from config.coins.start on first launch (see init)
+  abilities: { owned: [], loadout: [null, null] },
   level: 1,
   xp: 0,
   totalXp: 0,
@@ -35,6 +37,25 @@ export function computeXp(result, playerId, cfg) {
   else if (row.place <= 3 && result.ranking.length >= 4) parts.push(['Top 3', cfg.xpTop3]);
   const total = parts.reduce((a, [, v]) => a + v, 0);
   return { total, parts };
+}
+
+/** Pure coin formula (mirrored in server/progression.py). */
+export function computeCoins(result, playerId, c) {
+  const row = result.ranking.find((r) => r.id === playerId);
+  if (!row || !c) return { coins: 0, coinParts: [] };
+  const parts = [['Match', c.perMatch]];
+  if (row.tags) parts.push([`Tags ×${row.tags}`, row.tags * c.perTag]);
+  const surv = Math.floor(row.survival / 10) * c.per10sSurvived;
+  if (surv > 0) parts.push(['Survival', surv]);
+  if (row.winner) parts.push(['Victory', c.win]);
+  if (row.dodges) parts.push([`Perfect dodges ×${row.dodges}`, row.dodges * c.perPerfectDodge]);
+  if (row.coins) parts.push([`Coins grabbed ×${row.coins}`, row.coins * c.perPickup]);
+  return { coins: parts.reduce((a, [, v]) => a + v, 0), coinParts: parts };
+}
+
+/** XP + coins for one player. */
+export function computeAward(result, playerId, cfg) {
+  return { ...computeXp(result, playerId, cfg.progression), ...computeCoins(result, playerId, cfg.coins) };
 }
 
 class Progression {
@@ -79,6 +100,7 @@ class Progression {
     }
     p.stats.playTime += result.duration;
     p.xp += award.total;
+    p.coins = (p.coins ?? 0) + (award.coins || 0);
     p.totalXp += award.total;
     while (p.xp >= xpForLevel(p.level, cfg)) {
       p.xp -= xpForLevel(p.level, cfg);
@@ -108,6 +130,56 @@ class Progression {
     return isUnlocked(EMOTES[id]?.unlock, this.profile);
   }
 
+  /** First launch: starting coins from config. */
+  init(cfg) {
+    this.cfg = cfg;
+    if (this.profile.coins == null) {
+      this.profile.coins = cfg.coins.start;
+      this.save();
+    }
+  }
+
+  get coins() {
+    return this.profile.coins ?? 0;
+  }
+
+  owns(id) {
+    return this.profile.abilities.owned.includes(id);
+  }
+
+  /** Spend coins on an ability. Returns { ok, msg }. */
+  buyAbility(id) {
+    const def = this.cfg?.abilities?.[id];
+    if (!def) return { ok: false, msg: 'Unknown ability.' };
+    if (this.owns(id)) return { ok: false, msg: 'You already own it.' };
+    if (this.coins < def.price) return { ok: false, msg: `You need ${def.price - this.coins} more coins.` };
+    const p = this.profile;
+    p.coins -= def.price;
+    p.abilities.owned.push(id);
+    const free = p.abilities.loadout.indexOf(null);
+    if (free >= 0) p.abilities.loadout[free] = id; // auto-equip into an empty slot
+    this.save();
+    bus.emit('profile:changed', p);
+    return { ok: true, msg: `${def.name} unlocked!` };
+  }
+
+  /** Put an owned ability in slot 0/1 (or null to clear). A duplicate moves instead. */
+  equip(slot, id) {
+    const lo = this.profile.abilities.loadout;
+    if (id && !this.owns(id)) return false;
+    const other = lo.indexOf(id);
+    if (id && other >= 0 && other !== slot) lo[other] = lo[slot];
+    lo[slot] = id;
+    this.save();
+    bus.emit('profile:changed', this.profile);
+    return true;
+  }
+
+  /** Equipped abilities by slot ([F, R]); empty or no-longer-owned slots are null. */
+  get loadout() {
+    return this.profile.abilities.loadout.map((id) => (id && this.owns(id) ? id : null));
+  }
+
   reset() {
     this.profile = mergeProfile(null);
     this.save();
@@ -122,6 +194,10 @@ function mergeProfile(saved) {
     ...base,
     ...saved,
     cosmetics: { ...base.cosmetics, ...(saved.cosmetics || {}) },
+    abilities: {
+      owned: Array.isArray(saved.abilities?.owned) ? saved.abilities.owned : [],
+      loadout: Array.isArray(saved.abilities?.loadout) ? [saved.abilities.loadout[0] ?? null, saved.abilities.loadout[1] ?? null] : [null, null],
+    },
     stats: { ...base.stats, ...(saved.stats || {}) },
     history: Array.isArray(saved.history) ? saved.history : [],
   };

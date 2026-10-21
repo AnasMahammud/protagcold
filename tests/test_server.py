@@ -134,6 +134,35 @@ class ValidationTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(why, "frozen")
 
+    def test_ability_grant_allows_a_blink_then_expires(self):
+        # a 9 m jump in one update is a teleport...
+        ok, why = self.v.validate(self.m, self.msg(9, 0, 14), 100.05, False)
+        self.assertFalse(ok)
+        self.assertEqual(why, "too_fast")
+        # ...unless the server just validated a Blink of that length
+        self.m.grant(100.0, 0.8, dist=10.0)
+        ok, why = self.v.validate(self.m, self.msg(9, 0, 14), 100.05, False)
+        self.assertTrue(ok, why)
+        self.v.accept(self.m, self.msg(9, 0, 14), 100.05, False)
+        # the allowance is spent: blinking straight back is a teleport again
+        ok, why = self.v.validate(self.m, self.msg(0, 0, 14), 100.1, False)
+        self.assertFalse(ok)
+        # and an unused grant expires
+        m2 = PlayerMotion([0, 0, 14], 0, 100.0)
+        m2.grant(100.0, 0.8, dist=10.0)
+        ok, _ = self.v.validate(m2, self.msg(-9, 0, 14), 101.0, False)
+        self.assertFalse(ok)
+
+    def test_grapple_grant_allows_fast_velocity_only_while_active(self):
+        fast = {"p": [1.7, 0, 14], "v": [34, 0, 0], "y": 0, "st": 6, "fl": 0}  # beyond the normal 22 m/s burst cap
+        ok, why = self.v.validate(self.m, fast, 100.05, False)
+        self.assertEqual((ok, why), (False, "velocity"))
+        self.m.grant(100.0, 2.0, speed=24, vy=24)
+        ok, why = self.v.validate(self.m, fast, 100.05, False)
+        self.assertTrue(ok, why)
+        self.v.accept(self.m, fast, 100.05, False)
+        self.assertEqual(self.m.st, 6)  # grapple state is relayed to the other players
+
     def test_malformed_rejected(self):
         for bad in ({"p": [0, 0], "v": [0, 0, 0]}, {"p": [0, float("nan"), 0], "v": [0, 0, 0]}, {"p": "x", "v": [0, 0, 0]}, {"p": [0, 0, 14]}):
             ok, why = self.v.validate(self.m, bad, 100.1, False)
@@ -486,6 +515,127 @@ class PerfectDodgeServerTests(IntegrationTests):
         await it_c.send({"t": "tag", "target": run_c.id})
         ev = (await run_c.wait_for(lambda x: x.get("t") == "event" and x["ev"]["type"] in ("tag", "perfect_dodge")))["ev"]
         self.assertEqual(ev["type"], "tag")
+
+
+class AbilityCoinServerTests(IntegrationTests):
+    """Abilities and map coins online: the server validates loadouts, cooldowns, targets and
+    pickups, applies Shockwave knockback and owns every coin."""
+
+    test_http_serves_index_and_blocks_server_code = None
+    test_version_mismatch_rejected = None
+    test_full_online_flow = None
+    test_reconnect_with_token_resumes_identity = None
+    test_quick_play_matches_players_and_room_capacity = None
+    test_host_migrates_when_host_leaves = None
+    test_flooding_is_rate_limited = None
+
+    async def _match(self, loadouts):
+        a = await self.client("Ann")
+        b = await self.client("Bob")
+        await a.send({"t": "create_room", "public": False, "map": "training"})
+        code = (await a.wait_for(t_is("room")))["room"]["code"]
+        await b.send({"t": "join_room", "code": code})
+        await a.wait_for(lambda m: m.get("t") == "room" and len(m["room"]["players"]) == 2)
+        for c in (a, b):
+            await c.send({"t": "ready", "ready": True})
+        await a.wait_for(lambda m: m.get("t") == "room" and all(p["ready"] for p in m["room"]["players"]))
+        await a.send({"t": "start_match"})
+        start = await a.wait_for(t_is("match_start"))
+        for c, lo in zip((a, b), loadouts):
+            await c.send({"t": "loaded", "matchId": start["matchId"], "loadout": lo})
+        await a.wait_for(lambda m: m.get("t") == "rules" and m["rules"]["phase"] == "playing", timeout=5)
+        m = self.game.rooms[code].match
+        PerfectDodgeServerTests._place(self, m, a, [10.0, 0.0, 2.0], [0.0, 0.0, 0.0])
+        PerfectDodgeServerTests._place(self, m, b, [10.0, 0.0, -3.0], [0.0, 0.0, 0.0])
+        return m, a, b, start
+
+    async def test_loadout_is_sanitised_and_unequipped_abilities_are_denied(self):
+        m, a, b, _ = await self._match([["rocket", "rocket"], ["hack", "cloak", "blink"]])
+        self.assertEqual(m.loadouts[a.id], ["rocket", None])  # no duplicates
+        self.assertEqual(m.loadouts[b.id], [None, "cloak"])   # unknown ids dropped, max 2 slots
+        await b.send({"t": "ability", "id": "blink", "to": [10, 0, 3]})
+        self.assertEqual((await b.wait_for(t_is("ability_denied")))["reason"], "not_equipped")
+
+    async def test_cooldown_is_enforced_and_uses_are_relayed(self):
+        m, a, b, _ = await self._match([["rocket", "cloak"], []])
+        await a.send({"t": "ability", "id": "cloak"})
+        relayed = await b.wait_for(t_is("ability"))
+        self.assertEqual((relayed["id"], relayed["by"]), ("cloak", a.id))
+        self.assertEqual(relayed["data"]["duration"], CONFIG["abilities"]["cloak"]["duration"])
+        await a.send({"t": "ability", "id": "cloak"})  # again straight away
+        self.assertEqual((await a.wait_for(t_is("ability_denied")))["reason"], "cooldown")
+        await a.send({"t": "ability", "id": "rocket"})  # the other slot has its own cooldown
+        self.assertEqual((await b.wait_for(t_is("ability")))["id"], "rocket")
+        self.assertTrue(m.motion[a.id].granted(__import__("time").monotonic()))
+
+    async def test_blink_target_is_validated_and_granted(self):
+        m, a, b, _ = await self._match([["blink", None], []])
+        # into solid geometry: refused
+        solid = next(c for c in m.map.colliders if not c.invisible and c.y0 <= 0.2 and c.x1 - c.x0 > 1.5 and c.z1 - c.z0 > 1.5
+                     and c.top_at((c.x0 + c.x1) / 2, (c.z0 + c.z1) / 2) > 2)
+        cx, cz = (solid.x0 + solid.x1) / 2, (solid.z0 + solid.z1) / 2
+        PerfectDodgeServerTests._place(self, m, a, [cx + (solid.x1 - solid.x0) / 2 + 2, 0.0, cz], [0, 0, 0])
+        await a.send({"t": "ability", "id": "blink", "to": [cx, 0, cz]})
+        self.assertEqual((await a.wait_for(t_is("ability_denied")))["reason"], "blocked")
+        # too far: refused
+        PerfectDodgeServerTests._place(self, m, a, [10.0, 0.0, 2.0], [0, 0, 0])
+        await a.send({"t": "ability", "id": "blink", "to": [10, 0, -11 - 10]})
+        self.assertEqual((await a.wait_for(t_is("ability_denied")))["reason"], "blocked")
+        # a legal 8 m blink is relayed and the movement that follows is accepted
+        self.assertTrue(m.map.is_free(10, 0.1, 10, 0.36, 1.7))
+        m.ability_t[a.id].clear()
+        await a.send({"t": "ability", "id": "blink", "to": [10, 0, 10]})
+        relayed = await b.wait_for(t_is("ability"))
+        self.assertEqual(relayed["data"]["to"], [10, 0, 10])
+        await a.send({"t": "state", "s": 1, "p": [10, 0, 10], "v": [0, 0, 7], "y": 0, "st": 0, "fl": 1, "sc": 0})
+        await asyncio.sleep(0.1)
+        self.assertEqual(m.motion[a.id].pos, [10.0, 0.0, 10.0])
+        self.assertFalse(any(x.get("t") == "correct" for x in a.inbox))
+
+    async def test_shockwave_knocks_back_players_in_range_only(self):
+        m, a, b, _ = await self._match([["shockwave", None], []])
+        PerfectDodgeServerTests._place(self, m, b, [10.0, 0.0, -1.0], [0, 0, 0])  # 3 m from a
+        await a.send({"t": "ability", "id": "shockwave"})
+        imp = await b.wait_for(t_is("impulse"))
+        self.assertEqual(imp["by"], a.id)
+        vx, vy, vz = imp["v"]
+        self.assertLess(vz, -5)  # pushed away from a (a is at +z)
+        self.assertGreater(vy, 3)
+        self.assertTrue(m.motion[b.id].granted(__import__("time").monotonic()))
+        # out of range: nothing
+        m.ability_t[a.id].clear()
+        PerfectDodgeServerTests._place(self, m, b, [10.0, 0.0, -12.0], [0, 0, 0])
+        b.inbox.clear()
+        await a.send({"t": "ability", "id": "shockwave"})
+        await b.wait_for(t_is("ability"))
+        await asyncio.sleep(0.1)
+        self.assertFalse(any(x.get("t") == "impulse" for x in b.inbox))
+
+    async def test_map_coins_are_server_owned(self):
+        m, a, b, start = await self._match([[], []])
+        coins = start["coins"]
+        self.assertEqual(len(coins), CONFIG["coins"]["mapCoins"])
+        self.assertEqual(len({c[0] for c in coins}), len(coins))
+        cid, x, y, z = coins[0]
+        far = coins[1]
+        # standing at a coin: picked up, broadcast, counted by the rules
+        PerfectDodgeServerTests._place(self, m, a, [x, y - 0.9, z], [0, 0, 0])
+        await a.send({"t": "pickup", "id": cid})
+        taken = await b.wait_for(t_is("coin_taken"))
+        self.assertEqual((taken["id"], taken["by"]), (cid, a.id))
+        self.assertEqual(m.state["players"][a.id]["coinsPicked"], 1)
+        # the same coin twice, or a coin across the map: refused
+        await a.send({"t": "pickup", "id": cid})
+        self.assertEqual((await a.wait_for(t_is("coin_denied")))["id"], cid)
+        await b.send({"t": "pickup", "id": far[0]})
+        self.assertEqual((await b.wait_for(t_is("coin_denied")))["id"], far[0])
+        self.assertEqual(m.state["players"][b.id]["coinsPicked"], 0)
+        # respawn: a new coin appears somewhere free
+        self.assertEqual(len(m.coin_respawns), 1)
+        m.coin_respawns = [0.0]
+        spawn = await a.wait_for(t_is("coin_spawn"), timeout=2)
+        self.assertIn(spawn["id"], m.coins)
+        self.assertEqual(len(m.coins), CONFIG["coins"]["mapCoins"])
 
 
 class SocialTests(IntegrationTests):

@@ -50,6 +50,8 @@ export class BotBrain {
     inp.jumpHeld = false;
     inp.mx = inp.mz = 0;
     inp.sprint = false;
+    inp.ability = null;
+    inp.aim = null;
     const self = ctx.players.find((p) => p.id === me.id);
     if (!self || self.out || ctx.phase !== 'playing' || self.frozen) {
       this.path = null;
@@ -83,6 +85,7 @@ export class BotBrain {
       const dx = p.pos.x - self.pos.x, dz = p.pos.z - self.pos.z, dy = p.pos.y - self.pos.y;
       const dist = Math.hypot(dx, dy, dz);
       // runners always track IT (the HUD shows IT to humans too); chasers need sight or sound
+      if (p.cloaked && dist > 3) continue; // cloaked: invisible unless right next to you
       const knowsAlways = p.it && !self.it;
       let seen = knowsAlways || dist < HEAR_RADIUS;
       if (!seen && dist < 60) seen = w.lineOfSight(eye, { x: p.pos.x, y: p.pos.y + 1.4, z: p.pos.z });
@@ -191,10 +194,18 @@ export class BotBrain {
         const dx = pos.x - live.pos.x, dz = pos.z - live.pos.z;
         const d = Math.hypot(dx, dz) || 1;
         const closing = (live.vel.x * dx + live.vel.z * dz) / d;
-        if (closing > 1.5 && d < 4.5 && !live.frozen) {
-          if (this.perfectRoll == null) this.perfectRoll = this.rng() < (this.d.perfectDodge || 0);
+        if (closing > 1.5 && d < 6 && !live.frozen) {
+          if (this.perfectRoll == null) {
+            // Decide ONCE per approach when to dodge, as "time until IT reaches tag range".
+            // The perfect window is roughly ttc 0 .. 0.2 s. A bot going for it still misjudges
+            // the moment by up to ±0.15 s; the rest flinch early (a plain sidestep well before
+            // the window) or hold their nerve and just run.
+            this.perfectRoll = this.rng() < (this.d.perfectDodge || 0);
+            if (this.perfectRoll) this.dodgeAt = 0.1 + (this.rng() - 0.5) * 0.3;
+            else this.dodgeAt = this.rng() < 0.45 + this.d.predict * 0.3 ? 0.34 + this.rng() * 0.25 : -1;
+          }
           const ttc = (d - getConfig().tag.range) / closing;
-          const go = this.perfectRoll ? ttc <= 0.12 : d < 3.0 && this.rng() < 0.06 + this.d.predict * 0.05;
+          const go = this.dodgeAt >= 0 && ttc <= this.dodgeAt;
           if (go) {
             // sidestep perpendicular to the chaser's approach
             const side = this.rng() < 0.5 ? 1 : -1;
@@ -208,7 +219,8 @@ export class BotBrain {
     } else {
       // wander: stroll between interesting spots, conserve stamina
       if (!this.path || this.repathT <= 0) {
-        const n = this.nav.randomNode(this.rng, pos, 25);
+        const coin = ctx.coins?.length && this.rng() < 0.6 ? nearestOf(ctx.coins, pos, 30) : null;
+        const n = coin ? this.nav.nearest(coin.x, coin.y - 0.9, coin.z, 3) || this.nav.randomNode(this.rng, pos, 25) : this.nav.randomNode(this.rng, pos, 25);
         if (n) this._pathToNode(n);
         this.repathT = 4 + this.rng() * 4;
       }
@@ -274,6 +286,7 @@ export class BotBrain {
       inp.dodgePressed = true;
       this.pendingDodge = null;
     }
+    this._maybeUseAbility(dt, ctx, self);
     if (this.pendingJump) {
       inp.jumpPressed = true;
       inp.jumpHeld = true;
@@ -356,6 +369,51 @@ export class BotBrain {
     }
   }
 
+  /** Tactical ability use: escape tools when IT is on you, gap-closers when chasing. */
+  _maybeUseAbility(dt, ctx, self) {
+    const me = this.player;
+    const lo = me.loadout;
+    if (!lo?.some(Boolean) || !(this.d.abilityUse > 0)) return;
+    this.abilityT = (this.abilityT || 0) - dt;
+    if (this.abilityT > 0) return;
+    this.abilityT = 0.25;
+    const pos = me.ctrl.pos;
+    const ready = (id) => lo.includes(id) && !(me.abilityCd?.[id] > 0);
+    const slotOf = (id) => lo.indexOf(id);
+    const k = this.targetId ? ctx.players.find((q) => q.id === this.targetId) : null;
+    if (!k || (k.cloaked && this.role === 'chase')) return; // no aimbot on cloaked runners
+    const dx = k.pos.x - pos.x, dz = k.pos.z - pos.z, dy = k.pos.y - pos.y;
+    const d = Math.hypot(dx, dz) || 1;
+    let pick = null;
+    let aim = null;
+    if (this.role === 'flee') {
+      const closing = -(k.vel.x * dx + k.vel.z * dz) / d;
+      if (d > 4.5 || closing < 1.5 || this.rng() > this.d.abilityUse) return;
+      const away = { x: -dx / d, z: -dz / d };
+      const options = [];
+      if (ready('blink')) options.push(['blink', { move: rotate(away, (this.rng() - 0.5) * 1.2) }]);
+      if (ready('cloak')) options.push(['cloak', {}]);
+      if (ready('decoy')) options.push(['decoy', { dir: rotate(away, this.rng() < 0.5 ? 1.4 : -1.4) }]);
+      if (ready('shockwave') && d < 3.5) options.push(['shockwave', {}]);
+      if (ready('rocket')) options.push(['rocket', {}]);
+      if (!options.length) return;
+      [pick, aim] = options[Math.floor(this.rng() * options.length)];
+    } else if (this.role === 'chase') {
+      if (this.rng() > this.d.abilityUse * 0.5) return;
+      if (ready('rocket') && dy > 2.2 && d < 7) {
+        pick = 'rocket';
+        aim = {};
+      } else if (ready('blink') && d > 4.5 && d < 9.5 && Math.abs(dy) < 1 && ctx.world.lineOfSight({ x: pos.x, y: pos.y + 1, z: pos.z }, { x: k.pos.x, y: k.pos.y + 1, z: k.pos.z })) {
+        pick = 'blink';
+        aim = { move: { x: dx / d, z: dz / d } };
+      }
+    }
+    if (pick) {
+      this.input.ability = slotOf(pick);
+      this.input.aim = aim;
+    }
+  }
+
   _checkStuck(dt) {
     const pos = this.player.ctrl.pos;
     const moving = Math.hypot(this.input.mx, this.input.mz) > 0.3;
@@ -381,4 +439,22 @@ export class BotBrain {
       }
     }
   }
+}
+
+function rotate(v, a) {
+  const c = Math.cos(a), s = Math.sin(a);
+  return { x: v.x * c - v.z * s, z: v.x * s + v.z * c };
+}
+
+function nearestOf(list, pos, maxDist) {
+  let best = null;
+  let bd = maxDist;
+  for (const c of list) {
+    const d = Math.hypot(c.x - pos.x, c.z - pos.z) + Math.abs(c.y - pos.y) * 0.5;
+    if (d < bd) {
+      bd = d;
+      best = c;
+    }
+  }
+  return best;
 }

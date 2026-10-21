@@ -75,6 +75,7 @@ class MapData:
         self.kill_y = data.get("killY", -12)
         self.spawns = data["spawns"]
         self.pads = [Pad(p) for p in data.get("pads") or ()]
+        self.coin_spots = [list(s) for s in data.get("coinSpots") or ()]
         self.colliders = [Collider(s) for s in data["solids"]]
         self.grid: dict[tuple[int, int], list[Collider]] = {}
         self.big: list[Collider] = []

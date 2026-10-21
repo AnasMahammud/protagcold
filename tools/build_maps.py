@@ -147,7 +147,47 @@ class MapBuilder:
             problems.append(f"only {len(self.data['spawns'])} spawns (need 10)")
         return problems
 
+    def coin_spots(self, max_spots=36, min_gap=4.5):
+        """Places for gold coins: tops of reachable platforms (rewarding parkour) plus open
+        ground. A spot needs headroom and must not be inside or under another solid."""
+        solids = [s for s in self.data["solids"] if s["m"] != "invisible" and not s.get("ramp")]
+        blockers = [s for s in self.data["solids"] if s["m"] != "invisible"]  # ramps block too
+
+        def blocked(x, y, z):
+            for s in blockers:
+                b = s["b"]
+                if b[0] - 0.4 < x < b[3] + 0.4 and b[2] - 0.4 < z < b[5] + 0.4 and b[1] < y + 2.0 and b[4] > y + 0.05:
+                    return True
+            return False
+
+        cands = []
+        for s in solids:
+            b = s["b"]
+            w, d, top = b[3] - b[0], b[5] - b[2], b[4]
+            if w * d > 1500 or w < 1.2 or d < 1.2 or top > 8.5 or top < 0.5 or s.get("hide") or s.get("v") in ("post", "leg", "bar", "mast", "crane_leg", "wall", "pillar"):
+                continue
+            x, z = (b[0] + b[3]) / 2, (b[2] + b[5]) / 2
+            if not blocked(x, top, z):
+                cands.append((round(x, 2), round(top + 0.9, 2), round(z, 2), top))
+        bx0, bz0, bx1, bz1 = self.data["bounds"]
+        rng = random.Random(len(self.data["solids"]))
+        ground = []
+        for _ in range(400):
+            x, z = rng.uniform(bx0 + 3, bx1 - 3), rng.uniform(bz0 + 3, bz1 - 3)
+            if not blocked(x, 0.0, z):
+                ground.append((round(x, 2), 0.9, round(z, 2), 0.0))
+        # high spots first (they are the fun ones), then fill with ground spots, keeping a gap
+        cands.sort(key=lambda c: -c[3])
+        spots = []
+        for c in cands + ground:
+            if len(spots) >= max_spots:
+                break
+            if all((c[0] - s[0]) ** 2 + (c[2] - s[2]) ** 2 >= min_gap * min_gap for s in spots):
+                spots.append(c)
+        return [[s[0], s[1], s[2]] for s in spots]
+
     def write(self):
+        self.data["coinSpots"] = self.coin_spots()
         problems = self.validate()
         if problems:
             for p in problems:

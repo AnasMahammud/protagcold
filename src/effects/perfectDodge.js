@@ -5,6 +5,7 @@
 //   victim - you were IT and got outplayed: a short glitch hit and "OUTPLAYED".
 //   world  - someone else did it: rings, afterimages and stars so everyone sees what happened.
 // All timings run on REAL time so the slow-motion itself never slows the effect down.
+import * as THREE from 'three';
 import { audio } from '../audio/audio.js';
 import { bus } from '../core/events.js';
 import { settings } from '../core/settings.js';
@@ -18,6 +19,41 @@ export class PerfectDodgeDirector {
     this.game = game;
     this.cur = null; // the running hero/victim cinematic (only one at a time)
     this.ghosts = [];
+    this.pulseState = null;
+    // Afterimage materials are pooled and never disposed, so their shader is compiled exactly
+    // once (in prewarm) instead of stalling the first frame of a perfect dodge.
+    this.ghostPool = [];
+    for (let i = 0; i < 12; i++) {
+      const m = new THREE.MeshBasicMaterial({ color: CYAN, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending });
+      m.toneMapped = false;
+      this.ghostPool.push({ mat: m, busy: false });
+    }
+  }
+
+  /**
+   * Compile everything the cinematic needs BEFORE it is needed: the screen-effect composer and
+   * shader and the afterimage material. Called while a match loads (fixes the first-use hitch).
+   */
+  prewarm() {
+    const g = this.game;
+    const u = g.screenFx.u;
+    // an afterimage in view + the effect pass "active" for one real render
+    const tmp = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 0.3), this.ghostPool[0].mat);
+    tmp.position.copy(g.camera.position).add(new THREE.Vector3(0, 0, -2).applyQuaternion(g.camera.quaternion));
+    tmp.frustumCulled = false;
+    g.scene.add(tmp);
+    u.uVignette.value = 0.01;
+    g._render(0);
+    g.screenFx.reset();
+    g.renderer.compile(g.scene, g.camera);
+    g.scene.remove(tmp);
+    tmp.geometry.dispose();
+  }
+
+  /** Short screen punch for abilities (only when no cinematic is running). */
+  pulse({ chroma = 0, zoom = 0, ms = 200 } = {}) {
+    if (this.cur || settings.data.accessibility.reduceFlashing) return;
+    this.pulseState = { t: 0, dur: ms / 1000, chroma, zoom };
   }
 
   get busy() {
@@ -58,6 +94,19 @@ export class PerfectDodgeDirector {
   update(dt) {
     this._updateGhosts(dt);
     const c = this.cur;
+    if (!c && this.pulseState) {
+      const ps = this.pulseState;
+      ps.t += dt;
+      const k = Math.max(0, 1 - ps.t / ps.dur);
+      const u = this.game.screenFx.u;
+      u.uCenter.value.set(0.5, 0.5);
+      u.uChroma.value = ps.chroma * k;
+      u.uZoom.value = ps.zoom * k;
+      if (k <= 0) {
+        this.pulseState = null;
+        this.game.screenFx.reset();
+      }
+    }
     if (!c) return;
     c.t += dt;
     const T = c.duration;
@@ -157,10 +206,23 @@ export class PerfectDodgeDirector {
   }
 
   _ghost(player, color, life) {
+    this.spawnGhost(player, color, life);
+  }
+
+  /** Afterimage of a player's current pose (optionally left behind at another position). */
+  spawnGhost(player, color, life, atPos = null) {
     if (!player?.model || player.model.ghost) return;
-    const g = player.model.createGhost(color);
-    this.game.scene.add(g);
-    this.ghosts.push({ obj: g, t: 0, life });
+    const slot = this.ghostPool.find((s) => !s.busy);
+    if (!slot) return; // plenty already on screen
+    slot.busy = true;
+    slot.mat.color.set(color);
+    slot.mat.opacity = 0.55;
+    const geo = player.model.bakePose();
+    const mesh = new THREE.Mesh(geo, slot.mat);
+    if (atPos) mesh.position.set(atPos.x - player.renderPos.x, atPos.y - player.renderPos.y, atPos.z - player.renderPos.z);
+    mesh.frustumCulled = false;
+    this.game.scene.add(mesh);
+    this.ghosts.push({ obj: mesh, slot, t: 0, life });
   }
 
   _updateGhosts(dt) {
@@ -168,22 +230,22 @@ export class PerfectDodgeDirector {
       const gh = this.ghosts[i];
       gh.t += dt;
       const k = gh.t / gh.life;
-      gh.obj.userData.ghostMaterial.opacity = 0.55 * (1 - k);
-      gh.obj.scale.setScalar(1 + k * 0.08);
-      if (k >= 1) {
-        this.game.scene.remove(gh.obj);
-        gh.obj.userData.ghostMaterial.dispose();
-        this.ghosts.splice(i, 1);
-      }
+      gh.slot.mat.opacity = 0.55 * (1 - k);
+      if (k >= 1) this._dropGhost(i);
     }
+  }
+
+  _dropGhost(i) {
+    const gh = this.ghosts[i];
+    this.game.scene.remove(gh.obj);
+    gh.obj.geometry.dispose();
+    gh.slot.busy = false;
+    this.ghosts.splice(i, 1);
   }
 
   stop() {
     if (this.cur) this._finish(true);
-    for (const gh of this.ghosts) {
-      this.game.scene.remove(gh.obj);
-      gh.obj.userData.ghostMaterial.dispose();
-    }
-    this.ghosts = [];
+    this.pulseState = null;
+    while (this.ghosts.length) this._dropGhost(this.ghosts.length - 1);
   }
 }

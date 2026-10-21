@@ -7,8 +7,10 @@ import { mulberry32, shuffle } from '../core/mathUtil.js';
 import { settings } from '../core/settings.js';
 import { bus } from '../core/events.js';
 import { audio } from '../audio/audio.js';
-import { progression, computeXp } from '../progression/progression.js';
+import { progression, computeAward } from '../progression/progression.js';
 import { randomCosmetics } from '../progression/cosmetics.js';
+import { ABILITY_IDS } from './abilities.js';
+import { MapCoins } from './coins.js';
 
 export const BOT_NAMES = ['Dash', 'Blitz', 'Nova', 'Pixel', 'Turbo', 'Echo', 'Zippy', 'Raven', 'Comet', 'Juno', 'Rook', 'Vex', 'Kite', 'Bolt', 'Mako', 'Skye', 'Flint', 'Rally'];
 
@@ -46,8 +48,12 @@ export class LocalMatch extends MatchSession {
     for (let i = 0; i < nBots; i++) {
       const p = this.addPlayer({ id: `bot${i}`, name: names[i % names.length], kind: 'bot', cosmetics: randomCosmetics(this.rng) });
       p.brain = new BotBrain(p, this.nav, diff, Math.floor(this.rng() * 1e9));
+      // bots get random abilities by difficulty (easy: none, normal: 1, hard: 2)
+      this.abilities.setLoadout(p, shuffle(ABILITY_IDS.slice(), this.rng).slice(0, diff.abilities || 0));
       roster.push(p);
     }
+    if (this.local) this.abilities.setLoadout(this.local, progression.loadout);
+    this.coins = new MapCoins(this, { authoritative: true, rng: this.rng });
     const cx = (map.bounds[0] + map.bounds[2]) / 2, cz = (map.bounds[1] + map.bounds[3]) / 2;
     roster.forEach((p, i) => {
       const s = spawns[i % spawns.length];
@@ -109,13 +115,18 @@ export class LocalMatch extends MatchSession {
       if (p.out) continue;
       let input = ZERO;
       if (p.kind === 'local') input = rules.phase === 'countdown' ? ZERO : inp;
-      else if (p.brain) input = this.ended ? ZERO : p.brain.update(dt, botCtx || { players: [], world: this.world, phase: rules.phase });
+      else if (p.brain) {
+        input = this.ended ? ZERO : p.brain.update(dt, botCtx || { players: [], world: this.world, phase: rules.phase });
+        if (playing && input.ability != null) this.abilities.use(p, input.ability, input.aim || {});
+      }
       p.ctrl.frozen = p.frozen || rules.phase === 'countdown';
       p.ctrl.speedMultiplier = (p.it ? tagCfg.itSpeedBonus : 1) * (p.boosted ? this.cfg.perfectDodge.boostSpeed : 1);
       p.ctrl.step(input, dt);
       this.handleMoveEvents(p);
     }
+    this.abilities.step(dt);
     if (playing) {
+      this.coins?.step(dt);
       this.detectPerfectDodges();
       this.detectTags();
     }
@@ -151,7 +162,7 @@ export class LocalMatch extends MatchSession {
     const hero = dodger.id === this.localId;
     const s = pd.slowmo;
     const delay = hero ? 0.2 * (1 + s) + (pd.animTime - 0.48) * s + 0.08 : 0.4;
-    const res = R.perfectDodge(this.rules, tagger.id, dodger.id, { delay, stun: pd.stunTime, boost: pd.boostTime, protect: pd.protectTime });
+    const res = R.perfectDodge(this.rules, tagger.id, dodger.id, { delay, stun: pd.stunTime, boost: pd.boostTime, protect: pd.protectTime, cooldown: pd.cooldown });
     if (!res.ok) return false;
     dodger.ctrl.dodgeAge = 1e9; // one perfect dodge per dodge
     this.handleRuleEvents(res.events);
@@ -162,9 +173,15 @@ export class LocalMatch extends MatchSession {
   botContext() {
     const players = [];
     for (const p of this.players.values()) {
-      players.push({ id: p.id, pos: p.ctrl.pos, vel: p.ctrl.vel, it: p.it, out: p.out, protected: p.protected, frozen: p.frozen });
+      players.push({ id: p.id, pos: p.ctrl.pos, vel: p.ctrl.vel, it: p.it, out: p.out, protected: p.protected, frozen: p.frozen, cloaked: this.abilities.isCloaked(p) });
     }
-    return { players, world: this.world, phase: this.rules.phase };
+    players.push(...this.abilities.perceivables()); // decoys look like runners to bots
+    return { players, world: this.world, phase: this.rules.phase, coins: this.coins?.positions() || [] };
+  }
+
+  /** A gold coin was touched: counted by the rules (paid out with the end-of-match award). */
+  onCoinPicked(p) {
+    return R.collectCoin(this.rules, p.id);
   }
 
   detectTags() {
@@ -237,7 +254,7 @@ export class LocalMatch extends MatchSession {
     const result = this.rules.result;
     if (this.attract || this.opts.headless) return; // menu background / automated tests
     const local = this.local;
-    const award = computeXp(result, this.localId, this.cfg.progression);
+    const award = computeAward(result, this.localId, this.cfg);
     const prog = progression.recordMatch(result, this.localId, award, this.cfg.progression);
     const won = result.winners.includes(this.localId);
     audio.play(won ? 'victory' : 'defeat');

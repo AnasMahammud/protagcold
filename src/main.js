@@ -7,6 +7,7 @@ import { UI } from './ui/ui.js';
 import { TouchControls } from './ui/touch.js';
 import { net } from './multiplayer/netClient.js';
 import { audio } from './audio/audio.js';
+import { progression } from './progression/progression.js';
 
 const bar = document.getElementById('load-bar');
 const msg = document.getElementById('load-msg');
@@ -17,7 +18,8 @@ const progress = (p, text) => {
 
 async function boot() {
   progress(0.1, 'Loading configuration…');
-  await loadConfig();
+  const cfg = await loadConfig();
+  progression.init(cfg);
   if (!hasWebGL()) throw new Error('WebGL is not available in this browser. Try an up-to-date Chrome, Edge or Firefox.');
   document.body.classList.toggle('large-text', settings.data.accessibility.largeText);
 

@@ -15,6 +15,8 @@ export const ACTIONS = [
   ['slide', 'Slide'],
   ['dodge', 'Dodge'],
   ['vault', 'Vault / climb'],
+  ['ability1', 'Ability 1'],
+  ['ability2', 'Ability 2'],
   ['emote1', 'Emote: wave'],
   ['emote2', 'Emote: dance'],
   ['emote3', 'Emote: flex'],
@@ -31,9 +33,11 @@ export const DEFAULT_BINDINGS = {
   jump: ['Space'],
   sprint: ['ShiftLeft', 'ShiftRight'],
   // Ctrl is deliberately NOT a default: Ctrl+W (slide + forward) would close the browser tab.
-  slide: ['KeyC', 'KeyF'],
+  slide: ['KeyC'],
   dodge: ['KeyQ', 'Mouse2'],
   vault: ['KeyE'],
+  ability1: ['KeyF'],
+  ability2: ['KeyR'],
   emote1: ['Digit1'],
   emote2: ['Digit2'],
   emote3: ['Digit3'],
@@ -73,7 +77,7 @@ export const DEFAULT_SETTINGS = {
   },
   camera: { fov: 78, distance: 4.4, sprintFov: true, shake: true, landingDip: true },
   graphics: { quality: 'high', renderScale: 1.0, fpsLimit: 0, showFps: false, vsync: true, autoDetected: false },
-  accessibility: { reduceFlashing: false, hudScale: 1.0, itOutline: true, largeText: false },
+  accessibility: { reduceFlashing: false, hudScale: 1.0, itOutline: true, largeText: false, dodgeAssist: false },
   player: { name: '' },
 };
 
@@ -86,9 +90,34 @@ function deepMerge(base, over) {
   return out;
 }
 
+/**
+ * A key may belong to one action only. Saves from older versions can collide with actions added
+ * since (F used to be a second Slide key; it is now Ability 1): the key stays with the action
+ * whose DEFAULT primary key it is, otherwise with the first action listed. Returns true if fixed.
+ */
+export function dedupeBindings(b) {
+  const owner = new Map();
+  for (const [a, codes] of Object.entries(DEFAULT_BINDINGS)) if (codes[0] && !owner.has(codes[0])) owner.set(codes[0], a);
+  const users = new Map();
+  for (const [a, codes] of Object.entries(b)) for (const c of codes || []) users.set(c, [...(users.get(c) || []), a]);
+  let changed = false;
+  for (const [c, acts] of users) {
+    if (acts.length < 2) continue;
+    const keep = acts.includes(owner.get(c)) ? owner.get(c) : acts[0];
+    for (const a of acts) {
+      if (a === keep) continue;
+      b[a] = b[a].filter((x) => x !== c);
+      if (!b[a].length) b[a] = DEFAULT_BINDINGS[a].filter((x) => !users.has(x)); // never leave an action unbound
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 class Settings {
   constructor() {
     this.data = deepMerge(DEFAULT_SETTINGS, loadJSON('settings', {}));
+    if (dedupeBindings(this.data.controls.bindings)) this.save();
     if (!this.data.player.name) {
       this.data.player.name = `Runner${Math.floor(100 + Math.random() * 900)}`;
       this.save();

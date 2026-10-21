@@ -58,6 +58,8 @@ export function addPlayer(state, id, name) {
     noTagBackUntil: -1e9,
     boostUntil: -1e9,
     perfectDodges: 0,
+    lastPerfectAt: -1e9,
+    coinsPicked: 0,
   };
   // Late joiners in infection join the infected; in elimination they spectate.
   if (state.phase === 'playing') {
@@ -169,10 +171,11 @@ export function applyTag(state, taggerId, targetId) {
  * The tagger is frozen until `delay + stun` (delay = length of the cinematic), the dodger gets a
  * speed boost and short protection. No tag happens. Returns { ok, reason, events }.
  */
-export function perfectDodge(state, taggerId, dodgerId, { delay = 0, stun = 1, boost = 5, protect = 1.5 } = {}) {
+export function perfectDodge(state, taggerId, dodgerId, { delay = 0, stun = 1, boost = 5, protect = 1.5, cooldown = 0 } = {}) {
   const check = canTag(state, taggerId, dodgerId);
   if (!check.ok) return { ...check, events: [] };
   const now = state.time;
+  if (now - state.players[dodgerId].lastPerfectAt < cooldown) return { ok: false, reason: 'dodge_cooldown', events: [] };
   const a = state.players[taggerId];
   const b = state.players[dodgerId];
   a.frozenUntil = Math.max(a.frozenUntil, now + delay + stun);
@@ -180,9 +183,18 @@ export function perfectDodge(state, taggerId, dodgerId, { delay = 0, stun = 1, b
   b.boostUntil = now + delay + boost;
   b.protectedUntil = Math.max(b.protectedUntil, now + delay + protect);
   b.perfectDodges++;
+  b.lastPerfectAt = now;
   const ev = { type: 'perfect_dodge', tagger: taggerId, dodger: dodgerId, time: now, delay, stun, boost };
   state.events.push(ev);
   return { ok: true, reason: 'ok', events: [ev] };
+}
+
+/** A player grabbed a gold coin on the map (counted for the end-of-match coin award). */
+export function collectCoin(state, id) {
+  const p = state.players[id];
+  if (state.phase !== 'playing' || !p || !p.connected || p.out) return false;
+  p.coinsPicked++;
+  return true;
 }
 
 /** Practice helper: make a player IT immediately (only allowed in practice mode). */
@@ -309,6 +321,7 @@ export function computeResult(state, reason) {
       it: p.it,
       connected: p.connected,
       dodges: p.perfectDodges,
+      coins: p.coinsPicked,
       winner: winners.includes(p.id),
     })),
   };
@@ -324,7 +337,7 @@ export function snapshot(state) {
     duration: state.duration,
     players: state.order.map((id) => {
       const p = state.players[id];
-      return { id, it: p.it, out: p.out, tags: p.tags, itTime: round2(p.itTime), alive: round2(p.aliveTime), c: p.connected, fz: round2(Math.max(0, p.frozenUntil - state.time)), pr: round2(Math.max(0, p.protectedUntil - state.time)), bo: round2(Math.max(0, p.boostUntil - state.time)), pd: p.perfectDodges };
+      return { id, it: p.it, out: p.out, tags: p.tags, itTime: round2(p.itTime), alive: round2(p.aliveTime), c: p.connected, fz: round2(Math.max(0, p.frozenUntil - state.time)), pr: round2(Math.max(0, p.protectedUntil - state.time)), bo: round2(Math.max(0, p.boostUntil - state.time)), pd: p.perfectDodges, co: p.coinsPicked };
     }),
   };
 }

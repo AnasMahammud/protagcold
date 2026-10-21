@@ -42,7 +42,7 @@ python server/main.py --verbose            # debug logging
 - **Last Runner:** tagged runners are eliminated and spectate (press Jump to switch who you watch). The last runner standing wins.
 - **Practice:** no clock. Train every move on any arena, with 0 to 7 bots. Press **T** to swap who is IT.
 
-Tagging is automatic on contact. The HUD always shows who is IT, a directional arrow to the nearest threat (or, if you are IT, the nearest runner within 30 m), your stamina, and the dodge and slide cooldowns. Hold **Tab** for the scoreboard.
+Tagging is automatic on contact. The HUD always shows who is IT, a directional arrow to the nearest threat (or, if you are IT, the nearest runner within 30 m), your stamina, the dodge and slide cooldowns, your two ability slots and the gold coins you've grabbed. Hold **Tab** for the scoreboard.
 
 ### Controls (defaults, all rebindable in Settings → Controls)
 
@@ -50,12 +50,14 @@ Tagging is automatic on contact. The HUD always shows who is IT, a directional a
 |---|---|---|---|
 | Move / look | WASD / mouse | Left / right stick | Left half drag / right half drag |
 | Jump, wall jump | Space | A | Jump button |
-| Sprint | Shift (hold) | RB / RT (hold) or L3 | Sprint toggle, or push the stick fully |
-| Slide | C (or F) | B or LT | Slide button |
+| Sprint | Shift (hold) | RB (hold) or L3 | Sprint toggle, or push the stick fully |
+| Slide | C | B or LT | Slide button |
 | Dodge | Q or right mouse | LB | Dodge button |
 | Vault / climb | E (also automatic) | X | Vault button |
+| Ability slot 1 / 2 | F / R | Y / RT | Ability buttons (show the equipped icons) |
 | Emotes | 1 · 2 · 3 | D-pad | — |
 | Scoreboard | Tab | View | — |
+| Practice: swap IT | T | D-pad ↓ | — |
 | Pause | Esc / P | Menu | ❚❚ |
 
 Ctrl isn't a default binding on purpose: in a browser window, Ctrl+W (slide + forward) closes the tab. If you bind Ctrl, play in fullscreen (Settings → Graphics), where the game locks browser shortcuts.
@@ -66,17 +68,40 @@ Ctrl isn't a default binding on purpose: in a browser window, Ctrl+W (slide + fo
 
 Press **dodge** (Q, right mouse, LB, or the touch Dodge button) at the last moment, just as IT is about to reach you.
 
-- **The timing ring:** when IT closes in, a ring shrinks onto a target circle in the middle of the screen. When the two rings meet it flashes **NOW!**
+- **It's hard on purpose:** the window is about 0.14 s, IT has to really be lunging at you, and after a perfect dodge you can't land another one for 8 s.
+- **The timing ring:** when IT closes in, a ring shrinks onto a target circle in the middle of the screen. Dodge as they meet. The **Perfect-dodge assist** setting (Accessibility) adds a **NOW!** flash inside the window; it's off by default.
 - **The cinematic:** time slows to 15% (offline), the world flips into an inverted neon negative, shockwaves ripple out from you, afterimages trail your dodge, and the camera sweeps around you. Then time snaps back with a flash.
 - **The reward:** IT is stunned (dizzy stars) until 1 s after the cinematic ends, and you get a **5-second speed boost** (+30%, full stamina) with a short moment of protection.
 - **Online:** the server decides perfect dodges, so they're fair and can't be faked. You see the same cinematic, but the world isn't slowed, because other players' time can't be.
-- **Bots** on Normal and Hard can pull it off too.
+- **Bots** on Normal and Hard can pull it off, but like a human they misjudge the moment: in the test suite a bot perfect-dodges roughly 1 charge in 13. (Before this update they nailed about half.)
+- **No lag:** every shader the cinematic needs is compiled and drawn once behind the loading screen, so the first perfect dodge of a match no longer freezes the game (it used to stall ~0.7–0.9 s).
 - **Accessibility:** "Reduce flashing & shake" tones the inversion down and removes the flashes and glitches.
 - **Tuning:** all values are in `config/game.json` under `perfectDodge`.
 
+### Abilities and coins
+
+Spend **coins** in the **Abilities** shop (main menu) and equip two abilities, one on **F** and one on **R**.
+
+| Ability | Price | Cooldown | What it does |
+|---|---|---|---|
+| Blink | 100 | 9 s | Teleport up to 9 m the way you're moving (or looking). It stops at walls, so it can't clip through anything. |
+| Rocket Jump | 200 | 8 s | Blast yourself straight up with a small forward kick. It works mid-air, so you can reach rooftops in one move. |
+| Decoy | 250 | 14 s | Drop a hologram of yourself that sprints off. Bots, and careless friends, chase it; it pops when IT touches it. |
+| Grapple | 300 | 10 s | Fire a hook at whatever is under your crosshair (up to 24 m) and zip to it. The crosshair turns into a green ring when a surface is in range. Jump to let go early. |
+| Cloak | 350 | 18 s | Turn almost invisible for 4 s: no name tag, no HUD arrow pointing at you, and bots lose track of you beyond 3 m. |
+| Shockwave | 450 | 16 s | Blast everyone within 6 m away from you and into the air. Escape a corner, or knock runners off a roof. |
+
+**Earning coins:** every match pays out for playing (+15), tags (+4 each), survival (+1 per 10 s), winning (+25) and perfect dodges (+8 each). On top of that, **10 gold coins** are scattered around every arena (+3 each, respawning after 18 s), mostly up high on rooftops and platforms, so parkour pays. New players start with 100 coins: enough for Blink.
+
+**Bots** get random abilities on Normal (one) and Hard (two) and use them tactically: blinking, cloaking or shockwaving away when IT is on them, rocket-jumping up to runners above them, and grabbing coins when nobody's chasing them.
+
+**Online**, the server validates every ability: it must be in the loadout you joined with and off cooldown, Blink must land somewhere legal, and the Grapple anchor must be in range. The server grants exactly the extra movement that ability allows (so the anti-cheat doesn't snap you back), decides who a Shockwave hits and pushes them, and owns every map coin: it spawns them, checks you were really standing at a coin before counting it, and pays coins out with the match result.
+
+All the numbers are in `config/game.json` under `abilities` and `coins`.
+
 ## Online play
 
-The server in `server/` is authoritative. It decides IT status, tags, eliminations, timers, results and XP. Clients send only their movement (validated for speed, teleports, wall-clipping and freeze) plus tag *requests*, which the server checks with lag compensation.
+The server in `server/` is authoritative. It decides IT status, tags, eliminations, timers, results, XP and coins. Clients send only their movement (validated for speed, teleports, wall-clipping and freeze), plus tag, ability and coin-pickup *requests*, which the server checks (tags with lag compensation).
 
 ### Your own website (recommended)
 
@@ -135,14 +160,14 @@ Everything in Settings changes the real game and is saved on your device:
 - **Controls:** mouse X/Y, controller and touch sensitivity, invert Y, always-sprint, full key rebinding.
 - **Camera:** FOV, distance, speed-FOV, shake, landing dip.
 - **Graphics:** Low/Medium/High/Ultra presets, resolution scale, frame-rate limit, FPS counter, fullscreen.
-- **Accessibility:** reduce flashing and shake, HUD scale, larger text.
+- **Accessibility:** reduce flashing and shake, HUD scale, larger text, perfect-dodge assist.
 - **Network:** custom server address.
 
 On first launch the game picks a preset to suit your GPU.
 
 ## Progression
 
-You earn XP for every match: participation, tags, survival time, wins, and a top-3 bonus. Levels unlock cosmetics: suit, trim and accent colours, 10 hats, trails, tag effects and emotes. Some unlock through achievements (wins, lifetime tags, total survival time). The Profile screen shows lifetime stats and recent matches. Cosmetics never change gameplay. There are no purchases or loot boxes.
+You earn XP and coins for every match. The results screen breaks both down. XP comes from participation, tags, survival time, wins, and a top-3 bonus. Levels unlock cosmetics: suit, trim and accent colours, 10 hats, trails, tag effects and emotes. Some unlock through achievements (wins, lifetime tags, total survival time). Cosmetics never change gameplay. Coins buy abilities (see above). The Profile screen shows lifetime stats and recent matches. Everything is earned by playing: there is no real-money shop and no loot boxes.
 
 ---
 
@@ -156,16 +181,19 @@ config/game.json        ALL gameplay tuning, shared by client and server
 src/
   core/         config loader, event bus, settings, storage, input (kbd/mouse/gamepad/touch), math
   movement/     collision world (AABB + ramps, grid broad-phase) and the character controller
-  gameplay/     rules engine, Game (renderer/loop), session base, offline LocalMatch
+  gameplay/     rules engine, Game (renderer/loop), session base, offline LocalMatch,
+                abilities (AbilitySystem) and map coins (MapCoins)
   multiplayer/  WebSocket client, OnlineMatch (prediction + interpolation)
   ai/           navigation graph + A*, bot brain
   player/       procedural character model + animation, Player entity
   camera/       third-person camera rig
   maps/         map loader, renderer, procedural textures, decor prefabs, sky/backgrounds
-  effects/      pooled particles, rings, trails, lightning
+  effects/      pooled particles, rings, trails, lightning, perfect-dodge cinematic,
+                screen shader, ability effects
   audio/        synthesised SFX engine + procedural music sequencer
   progression/  XP/levels/stats, cosmetics catalogue
-  ui/           menus, HUD, touch controls, character preview, stylesheet
+  ui/           menus (incl. the Abilities shop), HUD, touch controls, ability icons,
+                character preview, stylesheet
 server/         Python stdlib server: HTTP + RFC 6455 WebSocket, rooms, match loop,
                 rules (port of src/gameplay/rules.js), movement validation, map collision
 tools/build_maps.py     map source -> assets/maps/*.json (run after editing maps)
@@ -179,18 +207,18 @@ See **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for the technical design an
 
 ### Editing the game
 
-- **Tuning** (speeds, jump height, cooldowns, match length, bot difficulty, XP): edit `config/game.json`. Client and server both read it.
-- **Maps:** edit `tools/build_maps.py`, then run `python tools/build_maps.py`. The builder validates spawns and geometry before writing.
+- **Tuning** (speeds, jump height, cooldowns, match length, bot difficulty, XP, coins, ability prices and cooldowns, perfect-dodge window): edit `config/game.json`. Client and server both read it.
+- **Maps:** edit `tools/build_maps.py`, then run `python tools/build_maps.py`. The builder validates spawns and geometry before writing, and places the coin spots (platform tops first, then open ground).
 - **Rules:** change `src/gameplay/rules.js` **and** `server/rules.py`, and add a case to `tests/shared/rules_cases.json`. Both test suites run it.
 
 ## Tests
 
 ```bash
-python -m unittest discover -s tests -v                      # 60 server, rules, integration, social, hosting, publishing and perfect-dodge tests
-# with the server running, open http://localhost:8080/tests/browser/   (71 browser tests)
+python -m unittest discover -s tests -v                      # 69 server, rules, integration, social, hosting, publishing, perfect-dodge, ability and coin tests
+# with the server running, open http://localhost:8080/tests/browser/   (90 browser tests)
 ```
 
-Latest results: **60/60 Python tests** and **71/71 browser tests** passing. Details, the manual verification checklist, and what could not be tested are in **[docs/TESTING.md](docs/TESTING.md)**.
+Latest results: **69/69 Python tests** and **90/90 browser tests** passing. Details, the manual verification checklist, and what could not be tested are in **[docs/TESTING.md](docs/TESTING.md)**.
 
 ## Requirements and performance
 
@@ -212,7 +240,7 @@ Also listed in [docs/TESTING.md](docs/TESTING.md#limitations).
 
 - **I couldn't watch the reference video** (only its title, "World Chase Tag USA 2021", was accessible). The design follows the publicly known chase-tag format and this project's design brief.
 - **Bots are offline only.** Online rooms are human players (minimum 2).
-- **Progression is stored locally** in the browser. Online XP is computed by the server, but local storage can still be edited by the player, so this isn't tamper-proof persistence.
+- **Progression is stored locally** in the browser, including coins and which abilities you own. Online XP and coins are computed by the server, but local storage can still be edited by the player, so this isn't tamper-proof persistence. Online, the server can't know what you *bought*; it enforces the loadout shape (2 slots, no duplicates), the cooldowns, and every ability's effect.
 - **Anti-cheat is practical, not perfect:** the server validates speed, teleports, solids and freeze, and checks tags with lag compensation, but it doesn't re-simulate full movement physics.
 - **Characters are procedural primitives**, animated procedurally; there are no skinned or motion-captured models.
 - **Not tested on real hardware here:** gamepads, physical touch devices, and real internet latency. Each is implemented to the standard browser APIs; see TESTING.md.

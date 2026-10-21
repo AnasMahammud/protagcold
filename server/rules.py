@@ -65,6 +65,8 @@ def add_player(state, pid, name=None):
         "noTagBackUntil": NEVER,
         "boostUntil": NEVER,
         "perfectDodges": 0,
+        "lastPerfectAt": NEVER,
+        "coinsPicked": 0,
     }
     if state["phase"] == "playing":
         if state["mode"] == "infection":
@@ -182,12 +184,14 @@ def apply_tag(state, tagger_id, target_id):
     return {"ok": True, "reason": "ok", "events": events}
 
 
-def perfect_dodge(state, tagger_id, dodger_id, delay=0.0, stun=1.0, boost=5.0, protect=1.5):
+def perfect_dodge(state, tagger_id, dodger_id, delay=0.0, stun=1.0, boost=5.0, protect=1.5, cooldown=0.0):
     """The dodger evaded a tag that would have been legal. Mirrors perfectDodge() in rules.js."""
     ok, reason = can_tag(state, tagger_id, dodger_id)
     if not ok:
         return {"ok": False, "reason": reason, "events": []}
     now = state["time"]
+    if now - state["players"][dodger_id]["lastPerfectAt"] < cooldown:
+        return {"ok": False, "reason": "dodge_cooldown", "events": []}
     a = state["players"][tagger_id]
     b = state["players"][dodger_id]
     a["frozenUntil"] = max(a["frozenUntil"], now + delay + stun)
@@ -195,9 +199,19 @@ def perfect_dodge(state, tagger_id, dodger_id, delay=0.0, stun=1.0, boost=5.0, p
     b["boostUntil"] = now + delay + boost
     b["protectedUntil"] = max(b["protectedUntil"], now + delay + protect)
     b["perfectDodges"] += 1
+    b["lastPerfectAt"] = now
     ev = {"type": "perfect_dodge", "tagger": tagger_id, "dodger": dodger_id, "time": now, "delay": delay, "stun": stun, "boost": boost}
     state["events"].append(ev)
     return {"ok": True, "reason": "ok", "events": [ev]}
+
+
+def collect_coin(state, pid):
+    """A player grabbed a gold coin on the map. Mirrors collectCoin() in rules.js."""
+    p = state["players"].get(pid)
+    if state["phase"] != "playing" or not p or not p["connected"] or p["out"]:
+        return False
+    p["coinsPicked"] += 1
+    return True
 
 
 def force_it(state, pid):
@@ -321,6 +335,7 @@ def compute_result(state, reason):
                 "it": p["it"],
                 "connected": p["connected"],
                 "dodges": p["perfectDodges"],
+                "coins": p["coinsPicked"],
                 "winner": p["id"] in winners,
             }
             for i, p in enumerate(ranked)
@@ -354,6 +369,7 @@ def snapshot(state):
                 "pr": _r2(max(0.0, p["protectedUntil"] - t)),
                 "bo": _r2(max(0.0, p["boostUntil"] - t)),
                 "pd": p["perfectDodges"],
+                "co": p["coinsPicked"],
             }
             for pid, p in ((i, state["players"][i]) for i in state["order"])
         ],

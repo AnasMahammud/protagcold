@@ -17,7 +17,7 @@ import time
 
 from . import rules as R
 from .mapdata import load_map, list_maps
-from .progression import compute_xp
+from .progression import compute_award
 from .validation import MoveValidator, PlayerMotion
 from .websocket import WebSocket, WebSocketClosed
 
@@ -35,6 +35,24 @@ CHAT_MAX = 140
 CHAT_HISTORY = 40
 KICK_BAN_SECONDS = 120.0
 ROOM_NAME_RE = re.compile(r"[^\w\-' !?.]")
+ABILITY_IDS = ("blink", "rocket", "decoy", "grapple", "cloak", "shockwave")
+
+
+def _vec3(v):
+    """A finite [x, y, z] list from client data, else None."""
+    if isinstance(v, list) and len(v) == 3 and all(isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x) for x in v):
+        return [float(x) for x in v]
+    return None
+
+
+def clean_loadout(lo):
+    """Two positional ability slots, no duplicates, unknown ids dropped (mirrors validLoadout)."""
+    out = [None, None]
+    if isinstance(lo, list):
+        for i, aid in enumerate(lo[:2]):
+            if aid in ABILITY_IDS and aid not in out:
+                out[i] = aid
+    return out
 
 
 def clean_room_name(name, fallback) -> str:
@@ -127,6 +145,26 @@ class Match:
         self.loaded: set[str] = set()
         self.task: asyncio.Task | None = None
         self.last_tag_req: dict[str, float] = {}
+        # abilities: loadouts arrive with "loaded"; cooldowns are tracked here (server time)
+        self.loadouts: dict[str, list] = {pid: [None, None] for pid in self.roster_ids}
+        self.ability_t: dict[str, dict[str, float]] = {pid: {} for pid in self.roster_ids}
+        # gold coins on the map (server-owned: spawn, validated pickup, respawn)
+        self.coins: dict[str, list] = {}
+        self.coin_seq = 0
+        self.coin_respawns: list[float] = []
+        for _ in range(min(cfg["coins"]["mapCoins"], len(self.map.coin_spots))):
+            self.spawn_coin()
+
+    def spawn_coin(self):
+        used = list(self.coins.values())
+        options = [s for s in self.map.coin_spots if all(math.hypot(u[0] - s[0], u[2] - s[2]) >= 1 for u in used)]
+        if not options:
+            return None
+        s = random.choice(options)
+        self.coin_seq += 1
+        cid = f"c{self.coin_seq}"
+        self.coins[cid] = [s[0], s[1], s[2]]
+        return cid
 
     def start_message(self):
         return {
@@ -139,6 +177,7 @@ class Match:
                         for pid in self.roster_ids],
             "spawns": self.spawns,
             "rules": R.snapshot(self.state),
+            "coins": [[cid, *p] for cid, p in self.coins.items()],
         }
 
     def resync_message(self):
@@ -607,6 +646,125 @@ class GameServer:
         room = c.room
         if room and room.match and msg.get("matchId") == room.match.id:
             room.match.loaded.add(c.id)
+            if c.id in room.match.loadouts:
+                # NOTE: what a player owns lives in their browser profile (there are no accounts),
+                # so the server can only enforce the loadout SHAPE, cooldowns and every effect.
+                room.match.loadouts[c.id] = clean_loadout(msg.get("loadout"))
+
+    # ------------------------------------------------------------------ abilities
+    async def on_ability(self, c, msg):
+        """Validate an ability use (equipped, off cooldown, legal target), grant the movement it
+        needs so the movement validator accepts it, apply server-side effects (shockwave
+        knockback) and relay it so everyone else sees it."""
+        room = c.room
+        m = room.match if room else None
+        aid = msg.get("id")
+        if not m or aid not in ABILITY_IDS or c.id not in m.motion:
+            return
+        st = m.state
+        p = st["players"].get(c.id)
+        deny = None
+        if st["phase"] != "playing" or not p or p["out"] or m.is_frozen(c.id):
+            deny = "unavailable"
+        elif aid not in m.loadouts.get(c.id, ()):
+            deny = "not_equipped"
+        a = self.cfg["abilities"][aid]
+        t = now()
+        if not deny and t - m.ability_t[c.id].get(aid, -1e9) < a["cooldown"] * 0.9:
+            deny = "cooldown"
+        mo = m.motion[c.id]
+        data = {}
+        if not deny:
+            if aid == "blink":
+                to = _vec3(msg.get("to"))
+                r = self.cfg["movement"]["radius"] * 0.6
+                d = math.hypot(to[0] - mo.pos[0], to[2] - mo.pos[2]) if to else 1e9
+                # tolerance: the client may be up to one send interval + latency ahead of us
+                if not to or d > a["range"] + 3.0 or abs(to[1] - mo.pos[1]) > 3.0 or not m.map.in_bounds(*to) or not m.map.is_free(to[0], to[1] + 0.1, to[2], r, 0.8):
+                    deny = "blocked"
+                else:
+                    mo.grant(t, 0.8, dist=d + 1.0, vy=4.0)
+                    data = {"from": [round(x, 2) for x in mo.pos], "to": [round(x, 2) for x in to]}
+            elif aid == "rocket":
+                mo.grant(t, 1.8, speed=a["forward"] + 3.0, vy=a["velocity"] + 4.0)
+            elif aid == "grapple":
+                anchor = _vec3(msg.get("anchor"))
+                if not anchor or math.dist(anchor, (mo.pos[0], mo.pos[1] + 1, mo.pos[2])) > a["range"] + 3.0 or not m.map.in_bounds(*anchor):
+                    deny = "no_target"
+                else:
+                    mo.grant(t, a["maxTime"] + 0.6, speed=a["speed"], vy=a["speed"])
+                    data = {"anchor": [round(x, 2) for x in anchor]}
+            elif aid == "cloak":
+                data = {"duration": a["duration"]}
+            elif aid == "decoy":
+                d = msg.get("dir")
+                dx, dz = (d[0], d[1]) if isinstance(d, list) and len(d) == 2 and all(isinstance(x, (int, float)) and math.isfinite(x) for x in d) else (0.0, 1.0)
+                n = math.hypot(dx, dz) or 1.0
+                data = {"pos": [round(x, 2) for x in mo.pos], "dir": [round(dx / n, 3), round(dz / n, 3)]}
+            elif aid == "shockwave":
+                await self._shockwave(room, m, c.id, a)
+        if deny:
+            await c.send({"t": "ability_denied", "id": aid, "reason": deny})
+            return
+        m.ability_t[c.id][aid] = t
+        await self.broadcast(room, {"t": "ability", "id": aid, "by": c.id, "data": data}, exclude=c.id)
+
+    async def _shockwave(self, room, m, src, a):
+        """Knock back everyone near the caster: the server decides who is hit and how hard, sends
+        each victim an impulse and grants them the extra speed so their movement validates."""
+        so = m.motion[src]
+        t = now()
+        for pid, mo in m.motion.items():
+            p = m.state["players"].get(pid)
+            if pid == src or not p or p["out"] or not p["connected"]:
+                continue
+            dx, dz, dy = mo.pos[0] - so.pos[0], mo.pos[2] - so.pos[2], mo.pos[1] - so.pos[1]
+            d = math.hypot(dx, dz)
+            if d > a["radius"] + 0.5 or abs(dy) > 3:
+                continue
+            k = 1 - min(1.0, d / a["radius"]) * 0.5
+            nx, nz = (dx / d, dz / d) if d > 0.01 else (1.0, 0.0)
+            v = [round(nx * a["force"] * k, 2), round(a["lift"] * k, 2), round(nz * a["force"] * k, 2)]
+            mo.grant(t, 1.5, speed=a["force"] + 2.0, vy=a["lift"] + 4.0)
+            target = room.players.get(pid)
+            if target:
+                await target.send({"t": "impulse", "v": v, "by": src})
+
+    # ------------------------------------------------------------------ map coins
+    async def on_pickup(self, c, msg):
+        room = c.room
+        m = room.match if room else None
+        cid = msg.get("id")
+        if not m or not isinstance(cid, str) or c.id not in m.motion:
+            return
+        coin = m.coins.get(cid)
+        ok = False
+        if coin and m.state["phase"] == "playing":
+            cc = self.cfg["coins"]
+            mo = m.motion[c.id]
+            t = now()
+            # lag tolerance: any accepted position from the last 0.4 s counts
+            samples = [h[1:] for h in mo.history if t - h[0] <= 0.4] or [mo.pos]
+            r = cc["pickupRadius"] + 0.8
+            ok = any(math.hypot(s[0] - coin[0], s[2] - coin[2]) <= r and abs(s[1] + 0.9 - coin[1]) <= 1.9 for s in samples)
+            ok = ok and R.collect_coin(m.state, c.id)
+        if not ok:
+            await c.send({"t": "coin_denied", "id": cid})
+            return
+        del m.coins[cid]
+        m.coin_respawns.append(now() + self.cfg["coins"]["respawn"])
+        await self.broadcast(room, {"t": "coin_taken", "id": cid, "by": c.id})
+
+    async def _coin_respawns(self, room, m):
+        t = now()
+        due = [x for x in m.coin_respawns if x <= t]
+        if not due:
+            return
+        m.coin_respawns = [x for x in m.coin_respawns if x > t]
+        for _ in due:
+            cid = m.spawn_coin()
+            if cid:
+                await self.broadcast(room, {"t": "coin_spawn", "id": cid, "p": m.coins[cid]})
 
     async def on_state(self, c, msg):
         room = c.room
@@ -730,7 +888,7 @@ class GameServer:
 
     async def _apply_perfect_dodge(self, room, m, a, b):
         pd = self.cfg["perfectDodge"]
-        res = R.perfect_dodge(m.state, a, b, delay=pd["onlineAnimTime"], stun=pd["stunTime"], boost=pd["boostTime"], protect=pd["protectTime"])
+        res = R.perfect_dodge(m.state, a, b, delay=pd["onlineAnimTime"], stun=pd["stunTime"], boost=pd["boostTime"], protect=pd["protectTime"], cooldown=pd["cooldown"])
         if not res["ok"]:
             return False
         m.motion[b].dodge_at = None  # one perfect dodge per dodge
@@ -784,6 +942,7 @@ class GameServer:
                 if m.state["phase"] == "playing":
                     await self._perfect_dodges(room, m)
                     await self._auto_tags(room, m)
+                    await self._coin_respawns(room, m)
                 rules_t += dt
                 if events or rules_t >= 0.25 or prev_phase != m.state["phase"]:
                     rules_t = 0.0
@@ -837,7 +996,7 @@ class GameServer:
         for pid in m.roster_ids:
             c = room.players.get(pid)
             if c and c.connected:
-                award = compute_xp(result, pid, self.cfg["progression"])
+                award = compute_award(result, pid, self.cfg)
                 await c.send({"t": "match_end", "result": result, "award": award})
         await self.broadcast_room(room)
         await asyncio.sleep(self.cfg["match"]["resultsTime"] * 0.5)

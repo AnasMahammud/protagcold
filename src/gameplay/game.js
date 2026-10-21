@@ -18,6 +18,7 @@ import { Effects } from '../effects/effects.js';
 import { audio } from '../audio/audio.js';
 import { createScreenFx } from '../effects/screenFx.js';
 import { PerfectDodgeDirector } from '../effects/perfectDodge.js';
+import * as AFX from '../effects/abilityFx.js';
 
 export class Game {
   constructor(canvas, input) {
@@ -174,6 +175,41 @@ export class Game {
     if (!this.map) return;
     this.map.visuals.dispose();
     this.map = null;
+  }
+
+  /**
+   * Compile every shader the perfect-dodge cinematic and the abilities need while the match is
+   * loading (screen-effect composer, afterimages, glow/rope materials, see-through cloaked
+   * characters). Without this the first perfect dodge or cloak stalls a frame for ~0.5-0.9 s.
+   */
+  prewarmEffects() {
+    const t0 = performance.now();
+    try {
+      // everything is DRAWN once in front of the camera (compiling alone is not enough: drivers
+      // may finish a shader lazily on its first real draw, which is exactly the stall we avoid)
+      const ahead = new THREE.Vector3(0, -0.8, -3).applyQuaternion(this.camera.quaternion).add(this.camera.position);
+      const model = this.session?.local?.model || [...(this.session?.players?.values() || [])][0]?.model;
+      const saved = model?.root.position.clone();
+      if (model) {
+        model.root.position.copy(ahead).y -= 1;
+        model.setCloak(0.5); // see-through variant used by Cloak and Decoy holograms
+      }
+      const extras = AFX.prewarmObjects();
+      extras.position.copy(ahead);
+      this.scene.add(extras);
+      this.perfectFx.prewarm();
+      this.scene.remove(extras);
+      AFX.disposeObjects(extras);
+      if (model) {
+        model.setCloak(null);
+        model.root.position.copy(saved);
+      }
+      this.renderer.compile(this.scene, this.camera);
+      this._render(0); // wait for the links now, behind the loading screen, not on frame 1
+    } catch (err) {
+      console.warn('[fx] prewarm failed', err);
+    }
+    console.info(`[fx] effects prewarmed in ${(performance.now() - t0).toFixed(0)} ms`);
   }
 
   setSession(session) {

@@ -13,7 +13,44 @@ python server/main.py
 
 The browser page shows each result and exposes `window.__TEST_RESULTS__` for automation.
 
-## Latest results (2026-10-20, development machine: Windows 11, Intel UHD GPU, Chromium)
+## Latest results (2026-10-21, development machine: Windows 11, Intel UHD GPU, Chromium)
+
+### Abilities, coins and the perfect-dodge rework (2026-10-21)
+
+- **Python: 69 / 69 passed.** New tests:
+  - Movement grants: a 9 m jump is rejected, but accepted right after a validated Blink. The allowance is used up, and an unused one expires. Grapple speed is allowed only while granted.
+  - Server, with real WebSocket clients: loadouts are sanitised and abilities that aren't equipped are refused; cooldowns are enforced per ability and uses are relayed to other players; a Blink into a wall or too far away is refused, while a legal Blink is relayed and the following movement is accepted with no correction; Shockwave pushes only players in range (away and up) and grants their speed.
+  - Map coins: the right number spawn with unique ids; standing at a coin picks it up, it's broadcast and the rules count it; picking the same coin twice, or one across the map, is refused; respawns broadcast.
+  - Rule parity: the coin payout (`coinAward`) and the perfect-dodge cooldown.
+- **Browser: 90 / 90 passed.** New tests:
+  - Blink travels its full range in the open, stops before a wall (never inside it), and refuses when there's no room.
+  - Rocket Jump reaches the expected apex.
+  - Grapple reaches its anchor and lets go there; jumping releases it with a hop; a wall in the way stops it.
+  - Offline Shockwave pushes only players in range.
+  - Cooldowns, empty slots and Cloak duration.
+  - Decoys run off, look like runners to bots, and pop when IT touches them.
+  - Bots ignore a cloaked runner beyond 3 m and notice them once uncloaked.
+  - Every map's coin spots stand on walkable ground, are free, and are reachable by bots (Rooftops 32/36, Arena 34/36, Docks 30/36, Training 35/36).
+  - Offline coin pickup counts and respawns.
+  - Shop: can't afford, buy, auto-equip, positional slots, swap, clear, no double buy, can't equip what you don't own.
+  - Key bindings: the defaults never collide, and old saves move F from Slide to Ability 1.
+- **Bots and perfect dodges:** IT homes in on a fleeing Normal or Hard bot 40 times. Result: **3 perfect dodges**, 35 tags, 2 escapes. With the old bot logic, about half of all contacts were perfect-dodged: its fallback "panic dodge" fired about 10% per frame once IT was within 3 m, which is almost entirely inside the perfect window.
+- **First-use frame times** (real client, Rooftops, synchronous render + `gl.finish`), before → after `Game.prewarmEffects`:
+
+  | | Before | After |
+  |---|---|---|
+  | First perfect-dodge frame | 686–875 ms | 14–30 ms |
+  | First frame of a match | 1570 ms | 7 ms |
+  | First Blink | 177 ms | 9 ms |
+  | First Grapple | 585 ms | 32 ms (later uses 7–18 ms) |
+  | First Cloak | 249–569 ms | 16 ms |
+  | Decoy / Rocket / Shockwave | 5–25 ms | 5–10 ms |
+
+  The prewarm itself takes about 0.9–1.1 s, behind the loading screen.
+- **Real client checks:** the menu shows the Abilities entry with the coin balance, and the player card shows coins and the F/R loadout. In the shop, buying Blink with the 100 starting coins auto-equipped it on F. In a practice match the HUD shows both ability slots with key labels and cooldown counters, the coin counter, and the green grapple ring when a surface is in range. The menu fits a 800×600 window.
+- **Real online match (two browser tabs):** both clients loaded the server's 10 coins. Shockwave and Grapple were relayed to the other client and replayed there (the rope appeared, then cleaned up). Abilities that weren't in the loadout the player joined with were refused by the server (`ability_denied`). Walking to a coin produced a server-validated `coin_taken`, the HUD counter showed 1, and the server's rules counted it. No console errors.
+
+### Earlier results (2026-10-20)
 
 - **Python: 60 / 60 passed** (`tests/test_rules.py`, `tests/test_server.py`, `tests/test_online.py`), including 6 lobby/friends tests, 8 internet-hosting tests, 3 server perfect-dodge tests and 2 perfect-dodge rule-parity cases:
   - cloud environment detection and invite addresses
@@ -57,6 +94,8 @@ Highlights from the browser run:
 | 15 | Every menu button works | browser: *every data-action in the UI has a handler* (38 actions), *every screen referenced by navigation exists*; manual pass below |
 | 16 | No holes, broken collision or out-of-bounds exploits | map builder validation (spawns free and grounded); browser *spawns are free, grounded and inside bounds*; *random-movement stress* (bounds, kill-plane, solids) on all maps |
 | 17 | Playable without a network | offline matches and bots need no connection (three.js is vendored); the headless match tests run the offline path |
+| 18 | Abilities can't break movement or be abused online | browser: Blink/Grapple never end inside geometry, cooldowns; Python: grants, cooldowns, target validation, knockback decided by the server |
+| 19 | Coins are earned fairly | rule parity for the payout; server-owned map coins with distance-checked pickups; every coin spot is reachable |
 
 Additional server tests:
 
@@ -110,7 +149,9 @@ Bugs found by this testing and fixed:
 ## Limitations
 
 - Bots are offline only; online rooms need 2 or more humans.
-- Progression is stored locally. Online XP is server-computed, but local storage isn't tamper-proof.
+- Progression is stored locally. Online XP and coins are server-computed, but local storage isn't tamper-proof. In particular, the server can't verify which abilities a player bought; it enforces the loadout shape, cooldowns and every effect.
+- The Shockwave knockback on a remote player starts when *their* client receives the `impulse` (one network trip), not on the caster's screen instantly.
+- Not felt by hand: how the abilities *play* with a real mouse and keyboard, on real hardware, against real people. They were exercised by scripts and tests here, not by a human.
 - Server movement validation is a practical safeguard (speed, teleport, solids, freeze); it doesn't re-simulate physics. The game isn't cheat-proof.
 - Procedural characters and animation (no skinned models); no moving platforms.
 - No Exit button: not applicable to a browser game.

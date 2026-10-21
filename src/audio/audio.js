@@ -250,7 +250,7 @@ export class AudioEngine {
   }
 }
 
-const UI_SOUNDS = new Set(['perfectDodge', 'timeResume', 'boost', 'outplayed', 'uiHover', 'uiClick', 'uiBack', 'countdown', 'go', 'victory', 'defeat', 'levelUp', 'unlock', 'error']);
+const UI_SOUNDS = new Set(['perfectDodge', 'timeResume', 'boost', 'outplayed', 'uiHover', 'uiClick', 'uiBack', 'countdown', 'go', 'victory', 'defeat', 'levelUp', 'unlock', 'error', 'purchase', 'abilityDenied', 'abilityReady']);
 
 const THROTTLE = {
   footstep: [0.07, 8],
@@ -258,6 +258,8 @@ const THROTTLE = {
   land: [0.08, 4],
   sprint: [0.6, 1],
   tag: [0.1, 3],
+  coin: [0.05, 4],
+  abilityDenied: [0.25, 1],
 };
 
 const SURFACE = {
@@ -424,6 +426,77 @@ const SFX = {
   uiBack(a, out, t) {
     a._tone(out, t, 0.08, { type: 'triangle', freq: 900, freqEnd: 600, gain: 0.08 });
     return 0.09;
+  },
+  // ---------------------------------------------------------------- abilities & coins
+  blink(a, out, t) {
+    // zap: falling sine sweep + bright crackle, then a "pop" on arrival
+    a._tone(out, t, 0.18, { type: 'sine', freq: 2400, freqEnd: 300, gain: 0.18 });
+    a._noise(out, t, 0.12, { type: 'highpass', freq: 4000, q: 0.5, gain: 0.22 });
+    a._tone(out, t + 0.12, 0.2, { type: 'triangle', freq: 300, freqEnd: 1600, gain: 0.12 });
+    a._noise(out, t + 0.12, 0.25, { freq: 1200, freqEnd: 5000, q: 0.8, gain: 0.12, attack: 0.01 });
+    return 0.4;
+  },
+  rocket(a, out, t) {
+    a._tone(out, t, 0.35, { freq: 90, freqEnd: 35, gain: 0.7, attack: 0.005 });
+    a._noise(out, t, 0.12, { freq: 900, q: 0.6, gain: 0.5 });
+    a._noise(out, t + 0.03, 0.9, { type: 'lowpass', freq: 2400, freqEnd: 300, q: 0.4, gain: 0.3, attack: 0.04 });
+    return 1.0;
+  },
+  grapple(a, out, t) {
+    a._noise(out, t, 0.08, { type: 'highpass', freq: 3000, q: 0.7, gain: 0.25 });
+    a._tone(out, t, 0.3, { type: 'sawtooth', freq: 1200, freqEnd: 300, gain: 0.05 });
+    a._tone(out, t + 0.05, 0.02, { type: 'square', freq: 2600, gain: 0.08 });
+    a._noise(out, t + 0.08, 0.6, { freq: 500, freqEnd: 2600, q: 1.5, gain: 0.12, attack: 0.08 });
+    return 0.7;
+  },
+  cloak(a, out, t) {
+    a._noise(out, t, 0.6, { freq: 4000, freqEnd: 300, q: 0.5, gain: 0.18, attack: 0.02 });
+    a._tone(out, t, 0.6, { type: 'sine', freq: 880, freqEnd: 220, gain: 0.08 });
+    a._tone(out, t + 0.04, 0.6, { type: 'sine', freq: 1320, freqEnd: 330, gain: 0.05 });
+    return 0.7;
+  },
+  decoy(a, out, t) {
+    for (const [i, f] of [660, 990, 1320].entries()) a._tone(out, t + i * 0.04, 0.25, { type: 'square', freq: f, freqEnd: f * 1.06, gain: 0.035 });
+    a._noise(out, t, 0.3, { freq: 2200, q: 2, gain: 0.08 });
+    return 0.4;
+  },
+  decoyPop(a, out, t) {
+    a._tone(out, t, 0.25, { type: 'square', freq: 1400, freqEnd: 200, gain: 0.06 });
+    a._noise(out, t, 0.2, { type: 'highpass', freq: 2500, q: 0.6, gain: 0.2 });
+    return 0.3;
+  },
+  shockwave(a, out, t) {
+    a._tone(out, t, 0.7, { freq: 70, freqEnd: 28, gain: 0.9, attack: 0.004 });
+    a._noise(out, t, 0.5, { type: 'lowpass', freq: 3000, freqEnd: 150, q: 0.6, gain: 0.5 });
+    a._tone(out, t, 0.25, { type: 'sawtooth', freq: 400, freqEnd: 60, gain: 0.12 });
+    return 0.8;
+  },
+  knocked(a, out, t) {
+    a._tone(out, t, 0.18, { freq: 180, freqEnd: 60, gain: 0.35 });
+    a._noise(out, t, 0.25, { freq: 900, freqEnd: 2600, q: 0.6, gain: 0.18 });
+    return 0.3;
+  },
+  coin(a, out, t) {
+    // classic two-note pickup
+    a._tone(out, t, 0.08, { type: 'square', freq: 987.77, gain: 0.05 });
+    a._tone(out, t + 0.07, 0.3, { type: 'square', freq: 1318.5, gain: 0.05 });
+    a._tone(out, t + 0.07, 0.3, { type: 'sine', freq: 2637, gain: 0.03 });
+    return 0.4;
+  },
+  purchase(a, out, t) {
+    for (const [i, f] of [1318.5, 1567.98, 2093, 2637].entries()) a._tone(out, t + i * 0.05, 0.25, { type: 'square', freq: f, gain: 0.035 });
+    a._noise(out, t, 0.4, { type: 'highpass', freq: 5000, q: 0.5, gain: 0.08 });
+    a._tone(out, t + 0.2, 0.7, { type: 'triangle', freq: 523.25, gain: 0.1 });
+    return 0.9;
+  },
+  abilityReady(a, out, t) {
+    a._tone(out, t, 0.12, { type: 'sine', freq: 1568, gain: 0.05 });
+    a._tone(out, t + 0.06, 0.18, { type: 'sine', freq: 2093, gain: 0.05 });
+    return 0.25;
+  },
+  abilityDenied(a, out, t) {
+    a._tone(out, t, 0.1, { type: 'square', freq: 220, freqEnd: 180, gain: 0.05 });
+    return 0.12;
   },
   error(a, out, t) {
     a._tone(out, t, 0.12, { type: 'square', freq: 200, gain: 0.06 });

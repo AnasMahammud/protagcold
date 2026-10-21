@@ -8,8 +8,8 @@
 
 import { clamp, moveTowards2, smoothstep, wrapAngle } from '../core/mathUtil.js';
 
-export const MS = Object.freeze({ GROUND: 0, AIR: 1, SLIDE: 2, VAULT: 3, MANTLE: 4, DODGE: 5 });
-export const MS_NAMES = ['ground', 'air', 'slide', 'vault', 'mantle', 'dodge'];
+export const MS = Object.freeze({ GROUND: 0, AIR: 1, SLIDE: 2, VAULT: 3, MANTLE: 4, DODGE: 5, GRAPPLE: 6 });
+export const MS_NAMES = ['ground', 'air', 'slide', 'vault', 'mantle', 'dodge', 'grapple'];
 
 const EMPTY_INPUT = Object.freeze({ mx: 0, mz: 0, jumpPressed: false, jumpHeld: false, sprint: false, slidePressed: false, dodgePressed: false, vaultPressed: false });
 
@@ -63,6 +63,7 @@ export class CharacterController {
     this.stamina = this.cfg.staminaMax;
     this.slideTimer = this.dodgeTimer = 0;
     this.dodgeAge = 1e9;
+    this.grapple = null;
     this.airTime = 0;
   }
 
@@ -90,6 +91,10 @@ export class CharacterController {
 
     if (this.script) {
       this._stepScript(dt);
+      return;
+    }
+    if (this.grapple) {
+      this._stepGrapple(dt, inp);
       return;
     }
 
@@ -272,6 +277,129 @@ export class CharacterController {
     }
     if (this.grounded) this.airTime = 0;
     else this.airTime += dt;
+  }
+
+  // ------------------------------------------------------------------ abilities
+  /**
+   * Blink: short-range teleport. Marches forward in small steps and stops at the first point
+   * that is not free, so it can never pass through a wall. Returns { from, to } or null.
+   */
+  blink(dirX, dirZ, range) {
+    if (this.script || this.frozen) return null;
+    const c = this.cfg;
+    const w = this.world;
+    const len = Math.hypot(dirX, dirZ);
+    if (len < 1e-3) return null;
+    dirX /= len;
+    dirZ /= len;
+    const from = { x: this.pos.x, y: this.pos.y, z: this.pos.z };
+    let best = null;
+    let y = this.pos.y;
+    for (let d = 0.25; d <= range + 1e-6; d += 0.25) {
+      const x = from.x + dirX * d, z = from.z + dirZ * d;
+      // follow the ground up small steps and down drops; keep height over gaps (lands later)
+      const g = w.groundBelow(x, z, c.radius * 0.6, y + c.stepHeight);
+      const ny = g && g.y >= y - 4 ? g.y : y;
+      if (!w.isFree(x, ny + 0.02, z, c.radius, this.height)) break;
+      y = ny;
+      best = { x, y, z };
+    }
+    if (!best || Math.hypot(best.x - from.x, best.z - from.z) < 1.0) return null;
+    this.pos.x = best.x; this.pos.y = best.y; this.pos.z = best.z;
+    const keep = Math.max(this.horizontalSpeed, c.runSpeed);
+    this.vel.x = dirX * keep;
+    this.vel.z = dirZ * keep;
+    this.vel.y = Math.max(0, this.vel.y);
+    if (this.state === MS.SLIDE) this._endSlide();
+    const landed = w.groundBelow(best.x, best.z, c.radius * 0.6, best.y + 0.05);
+    this.grounded = !!landed && Math.abs(landed.y - best.y) < 0.05;
+    this.state = this.grounded ? MS.GROUND : MS.AIR;
+    this.yaw = Math.atan2(-dirX, -dirZ);
+    const to = { ...best };
+    this.emit('blink', { from, to });
+    return { from, to };
+  }
+
+  /** Grapple hook: fly toward an anchor point (validated by the caller with a ray cast). */
+  startGrapple(anchor, speed, maxTime) {
+    if (this.script || this.frozen) return false;
+    if (this.state === MS.SLIDE) this._endSlide();
+    this.grapple = { x: anchor.x, y: anchor.y, z: anchor.z, speed, t: 0, maxTime, lastD: Infinity, stuck: 0 };
+    this.state = MS.GRAPPLE;
+    this.grounded = false;
+    this.emit('grapple', { anchor: { ...anchor } });
+    return true;
+  }
+
+  _stepGrapple(dt, inp) {
+    const g = this.grapple;
+    g.t += dt;
+    const cx = this.pos.x, cy = this.pos.y + 1.0, cz = this.pos.z;
+    const dx = g.x - cx, dy = g.y - cy, dz = g.z - cz;
+    const d = Math.hypot(dx, dy, dz);
+    if (inp.jumpPressed) {
+      // release early with a hop: keeps the momentum (skill tech)
+      this.endGrapple(4);
+      return;
+    }
+    if (d < 1.4 || g.t > g.maxTime) {
+      this.endGrapple(3);
+      return;
+    }
+    if (g.lastD - d < g.speed * dt * 0.15) g.stuck += dt; // blocked by geometry
+    else g.stuck = 0;
+    g.lastD = d;
+    if (g.stuck > 0.2) {
+      this.endGrapple(2);
+      return;
+    }
+    this.vel.x = (dx / d) * g.speed;
+    this.vel.y = (dy / d) * g.speed + 1.5;
+    this.vel.z = (dz / d) * g.speed;
+    this.yaw = Math.atan2(-dx, -dz);
+    this._integrate(dt);
+    this.state = MS.GRAPPLE;
+  }
+
+  endGrapple(hop = 0) {
+    if (!this.grapple) return;
+    this.grapple = null;
+    this.vel.x *= 0.6;
+    this.vel.z *= 0.6;
+    this.vel.y = Math.max(this.vel.y * 0.4, hop);
+    this.state = this.grounded ? MS.GROUND : MS.AIR;
+    this.emit('grapple_end');
+  }
+
+  /** Rocket jump: big upward launch with a little forward push. Works in the air too. */
+  rocket(vy, forward) {
+    if (this.script || this.frozen) return false;
+    if (this.grapple) this.endGrapple();
+    if (this.state === MS.SLIDE) this._endSlide();
+    const fx = -Math.sin(this.yaw), fz = -Math.cos(this.yaw);
+    this.vel.y = Math.max(this.vel.y, vy);
+    this.vel.x += fx * forward;
+    this.vel.z += fz * forward;
+    this.grounded = false;
+    this.coyote = 0;
+    this.state = MS.AIR;
+    this.emit('rocket');
+    return true;
+  }
+
+  /** External push (Shockwave). Ignored during scripted vault/mantle motion. */
+  applyImpulse(vx, vy, vz) {
+    if (this.script) return;
+    if (this.grapple) this.endGrapple();
+    if (this.state === MS.SLIDE) this._endSlide();
+    this.vel.x += vx;
+    this.vel.y = Math.max(this.vel.y, 0) + vy;
+    this.vel.z += vz;
+    if (vy > 0) {
+      this.grounded = false;
+      this.state = MS.AIR;
+    }
+    this.emit('knocked');
   }
 
   _jump(scale) {

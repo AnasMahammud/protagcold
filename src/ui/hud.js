@@ -2,6 +2,9 @@
 import { bus } from '../core/events.js';
 import { settings } from '../core/settings.js';
 import { formatSeconds } from '../core/mathUtil.js';
+import { audio } from '../audio/audio.js';
+import { abilityIcon, COIN_SVG } from './abilityIcons.js';
+import { ABILITY_INFO } from '../gameplay/abilities.js';
 
 const MODE_NAMES = { classic: 'Classic Tag', infection: 'Infection', elimination: 'Last Runner', practice: 'Practice' };
 
@@ -22,6 +25,7 @@ export class Hud {
       </div>
       <div class="tr">
         <div class="tags">0<small>TAGS</small></div>
+        <div class="coinsbox">${COIN_SVG}<span>0</span><em></em></div>
         <div class="net"></div>
         <div class="fps"></div>
       </div>
@@ -36,6 +40,8 @@ export class Hud {
         </div>
         <div class="stamina"><i></i></div>
       </div>
+      <div class="abslots"></div>
+      <div class="cloakfx"></div>
       <div class="scoreboard panel hidden"></div>
       <div class="lockhint hidden">Click to control the camera</div>
       <div class="speedlines"></div>
@@ -52,6 +58,8 @@ export class Hud {
       speedlines: q('.speedlines'), cue: q('.dodgecue'), cueApproach: q('.cue-approach'), cueKey: q('.cue-key'), cueTxt: q('.cue-txt'),
       boostbar: q('.boostbar'), boostI: q('.boostbar i'), perfect: q('.perfect'), perfectT: q('.perfect .pt'), perfectS: q('.perfect .ps'),
       dodgeLabel: q('.ability.dodge .ab-label'),
+      crosshair: q('.crosshair'), abslots: q('.abslots'), coins: q('.coinsbox'), coinsN: q('.coinsbox span'), coinsPop: q('.coinsbox em'),
+      cloakfx: q('.cloakfx'),
     };
     this.cache = {};
     this.bannerTimer = null;
@@ -59,6 +67,7 @@ export class Hud {
     bus.on('hud:feed', (f) => this.feed(f));
     bus.on('hud:perfect', (p) => this.perfect(p));
     bus.on('hud:perfectEnd', () => this._hidePerfect());
+    bus.on('hud:coin', (c) => this.coinPop(c));
     bus.on('settings:changed', () => this.applyScale());
     this.applyScale();
   }
@@ -127,6 +136,7 @@ export class Hud {
       }
     }
     this._perfectHud(s);
+    this._abilityHud(s);
     let status = '';
     if (s.stunned) status = 'STUNNED — you got perfect-dodged!';
     else if (s.frozen) status = 'STUNNED — new IT';
@@ -177,10 +187,11 @@ export class Hud {
       const k = Math.min(1, cue.ttc / 0.6);
       e.cueApproach.style.transform = `translate(-50%, -50%) scale(${(1 + k * 2.2).toFixed(3)})`;
       this._set('cueKey', e.cueKey, 'text', s.dodgeKey || 'Q');
-      this._set('cueTxt', e.cueTxt, 'text', cue.perfect ? 'NOW!' : 'DODGE');
-      if (this.cache.cueP !== cue.perfect) {
-        this.cache.cueP = cue.perfect;
-        e.cue.classList.toggle('now', cue.perfect);
+      const now = cue.perfect && s.dodgeAssist;
+      this._set('cueTxt', e.cueTxt, 'text', now ? 'NOW!' : 'DODGE');
+      if (this.cache.cueP !== now) {
+        this.cache.cueP = now;
+        e.cue.classList.toggle('now', now);
       }
     }
     const boosting = s.boostLeft > 0;
@@ -190,6 +201,61 @@ export class Hud {
       this.cache.lines = boosting;
       e.speedlines.classList.toggle('on', boosting && !settings.data.accessibility.reduceFlashing);
     }
+  }
+
+  /** Ability slots (icon, key, cooldown sweep), grapple crosshair, cloak overlay, coin counter. */
+  _abilityHud(s) {
+    const e = this.el;
+    const abs = s.abilities || [];
+    const sig = abs.map((a) => (a ? `${a.id}:${a.key}` : '-')).join('|');
+    if (this.cache.absig !== sig) {
+      this.cache.absig = sig;
+      e.abslots.innerHTML = abs.some(Boolean)
+        ? abs.map((a) => (a
+          ? `<div class="abslot ready" style="--c:${ABILITY_INFO[a.id].color}"><div class="ico">${abilityIcon(a.id)}</div><div class="sweep"></div><b class="cdn"></b><span class="key">${esc(a.key)}</span></div>`
+          : '<div class="abslot empty"><span class="key">—</span></div>')).join('')
+        : '';
+      this.slotEls = [...e.abslots.querySelectorAll('.abslot')];
+      this.slotReady = abs.map(() => true);
+      for (let i = 0; i < abs.length; i++) delete this.cache[`abp${i}`];
+    }
+    abs.forEach((a, i) => {
+      const el = this.slotEls[i];
+      if (!a || !el) return;
+      const pv = Math.round((a.cd > 0 ? a.cd / a.max : 0) * 100);
+      const key = `abp${i}`;
+      if (this.cache[key] !== pv) {
+        this.cache[key] = pv;
+        el.style.setProperty('--p', pv);
+        el.querySelector('.cdn').textContent = a.cd > 0 ? Math.ceil(a.cd) : '';
+      }
+      const ready = a.cd <= 0;
+      if (this.slotReady[i] !== ready) {
+        this.slotReady[i] = ready;
+        el.classList.toggle('ready', ready);
+        el.classList.remove('flash', 'used');
+        void el.offsetWidth; // restart the animation
+        el.classList.add(ready ? 'flash' : 'used');
+        if (ready) audio.play('abilityReady');
+      }
+    });
+    if (this.cache.grap !== s.grappleOk) {
+      this.cache.grap = s.grappleOk;
+      e.crosshair.classList.toggle('grapple', !!s.grappleOk);
+    }
+    if (this.cache.cloak !== s.cloaked) {
+      this.cache.cloak = s.cloaked;
+      e.cloakfx.classList.toggle('on', !!s.cloaked);
+    }
+    this._set('coinsN', e.coinsN, 'text', String(s.coinsGrabbed || 0));
+  }
+
+  coinPop({ value }) {
+    const e = this.el;
+    e.coinsPop.textContent = `+${value}`;
+    e.coins.classList.remove('pop');
+    void e.coins.offsetWidth;
+    e.coins.classList.add('pop');
   }
 
   perfect({ title, sub = '', kind = 'hero', ms = 1500 }) {
