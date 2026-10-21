@@ -11,6 +11,7 @@ import { progression, computeAward } from '../progression/progression.js';
 import { randomCosmetics } from '../progression/cosmetics.js';
 import { ABILITY_IDS } from './abilities.js';
 import { MapCoins } from './coins.js';
+import { EventScheduler, eventsForMap, eventMods } from './mapEvents.js';
 
 export const BOT_NAMES = ['Dash', 'Blitz', 'Nova', 'Pixel', 'Turbo', 'Echo', 'Zippy', 'Raven', 'Comet', 'Juno', 'Rook', 'Vex', 'Kite', 'Bolt', 'Mako', 'Skye', 'Flint', 'Rally'];
 
@@ -54,6 +55,8 @@ export class LocalMatch extends MatchSession {
     }
     if (this.local) this.abilities.setLoadout(this.local, progression.loadout);
     this.coins = new MapCoins(this, { authoritative: true, rng: this.rng });
+    this.mapEvent = null;
+    this.eventPlan = this.attract || opts.headless ? null : new EventScheduler(cfg.mapEvents, eventsForMap(map), this.rng);
     const cx = (map.bounds[0] + map.bounds[2]) / 2, cz = (map.bounds[1] + map.bounds[3]) / 2;
     roster.forEach((p, i) => {
       const s = spawns[i % spawns.length];
@@ -73,6 +76,7 @@ export class LocalMatch extends MatchSession {
       startIt,
       cfg,
       countdown: this.attract ? 0 : cfg.match.countdown,
+      zone: rulesMode === 'zone' ? zonePlan(map, this.rng) : undefined,
     });
     this.syncFlags();
     if (this.local) this.game.cameraRig.snapBehind(this.local.ctrl.yaw);
@@ -108,7 +112,14 @@ export class LocalMatch extends MatchSession {
     this.syncFlags();
 
     const playing = rules.phase === 'playing' && !this.ended;
+    if (playing && this.eventPlan) {
+      const { ev, started } = this.eventPlan.step(rules.time, rules.duration);
+      this.mapEvent = ev;
+      if (started && ev.kind === 'coinrain') this.coins.rain(this.cfg.mapEvents.rainCoins);
+    }
+    const mods = eventMods(this.mapEvent, rules.time);
     const botCtx = playing ? this.botContext() : null;
+    if (botCtx) botCtx.dark = mods.dark;
     const tagCfg = this.cfg.tag;
     for (const p of this.players.values()) {
       p.beginStep();
@@ -120,7 +131,9 @@ export class LocalMatch extends MatchSession {
         if (playing && input.ability != null) this.abilities.use(p, input.ability, input.aim || {});
       }
       p.ctrl.frozen = p.frozen || rules.phase === 'countdown';
-      p.ctrl.speedMultiplier = (p.it ? tagCfg.itSpeedBonus : 1) * (p.boosted ? this.cfg.perfectDodge.boostSpeed : 1);
+      p.ctrl.speedMultiplier = (p.it ? tagCfg.itSpeedBonus : 1) * (p.boosted ? this.cfg.perfectDodge.boostSpeed : 1) * mods.speed;
+      p.ctrl.gravityScale = mods.gravity;
+      p.ctrl.traction = mods.traction;
       p.ctrl.step(input, dt);
       this.handleMoveEvents(p);
     }
@@ -129,6 +142,7 @@ export class LocalMatch extends MatchSession {
       this.coins?.step(dt);
       this.detectPerfectDodges();
       this.detectTags();
+      if (rules.zone) this.checkZone(dt);
     }
     if (this.ended) this.endTimer += dt;
   }
@@ -170,13 +184,27 @@ export class LocalMatch extends MatchSession {
     return true;
   }
 
+  /** Shrinking Zone: runners outside the ring build up "storm" time and are knocked out. */
+  checkZone(dt) {
+    const z = R.zoneAt(this.rules);
+    for (const p of this.players.values()) {
+      if (p.out || p.it) continue;
+      const outside = Math.hypot(p.ctrl.pos.x - z.x, p.ctrl.pos.z - z.z) > z.r;
+      const evs = R.zoneTick(this.rules, p.id, dt, outside);
+      if (evs.length) {
+        this.handleRuleEvents(evs);
+        this.syncFlags();
+      }
+    }
+  }
+
   botContext() {
     const players = [];
     for (const p of this.players.values()) {
       players.push({ id: p.id, pos: p.ctrl.pos, vel: p.ctrl.vel, it: p.it, out: p.out, protected: p.protected, frozen: p.frozen, cloaked: this.abilities.isCloaked(p) });
     }
     players.push(...this.abilities.perceivables()); // decoys look like runners to bots
-    return { players, world: this.world, phase: this.rules.phase, coins: this.coins?.positions() || [] };
+    return { players, world: this.world, phase: this.rules.phase, coins: this.coins?.positions() || [], zone: this.rules.zone ? R.zoneAt(this.rules, this.rules.time + 6) : null, fuse: this.rules.potato?.fuse ?? null };
   }
 
   /** A gold coin was touched: counted by the rules (paid out with the end-of-match award). */
@@ -281,14 +309,30 @@ export class LocalMatch extends MatchSession {
       timeLeft: R.timeLeft(r),
       localTags: this.localId ? r.players[this.localId]?.tags ?? 0 : 0,
       scoreboard,
+      time: r.time,
+      fuse: r.potato ? Math.max(0, r.potato.fuse) : null,
+      fuseMax: r.potato?.max ?? null,
+      potatoRound: r.potato?.round ?? null,
+      zone: r.zone ? { ...R.zoneAt(r), hold: r.zone.hold, end: r.zone.end, limit: r.zone.limit } : null,
+      mapEvent: this.mapEvent,
+      localStorm: this.localId ? r.players[this.localId]?.stormTime ?? 0 : 0,
     };
   }
+}
+
+/** Shrinking Zone layout: starts over the whole map, closes toward one of its spawns. */
+export function zonePlan(map, rng) {
+  const [x0, z0, x1, z1] = map.bounds;
+  const ground = map.spawns.filter((s) => s[1] < 1);
+  const pool = ground.length ? ground : map.spawns;
+  const end = pool[Math.floor(rng() * pool.length)];
+  return { x0: (x0 + x1) / 2, z0: (z0 + z1) / 2, x1: end[0], z1: end[2], r0: Math.hypot(x1 - x0, z1 - z0) / 2 + 2 };
 }
 
 export function reasonText(result) {
   switch (result.reason) {
     case 'all_infected': return 'Everyone was infected';
-    case 'last_runner': return 'One runner left standing';
+    case 'last_runner': return result.mode === 'hotpotato' ? 'Last one standing!' : 'One runner left standing';
     case 'all_out': return 'Every runner was eliminated';
     case 'players': return 'Not enough players';
     default:

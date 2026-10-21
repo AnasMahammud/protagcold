@@ -15,6 +15,7 @@ sys.path.insert(0, ROOT)
 
 from server import websocket as W  # noqa: E402
 from server.config import CONFIG  # noqa: E402
+from server import rules as R  # noqa: E402
 from server.game_server import GameServer  # noqa: E402
 from server.main import make_handler, resolve  # noqa: E402
 from server.mapdata import load_map, list_maps  # noqa: E402
@@ -168,6 +169,59 @@ class ValidationTests(unittest.TestCase):
             ok, why = self.v.validate(self.m, bad, 100.1, False)
             self.assertFalse(ok)
             self.assertEqual(why, "malformed")
+
+
+class MapFeatureValidationTests(unittest.TestCase):
+    """v1.02: conveyors and water slides legitimately move players faster than they can run, but
+    only on them. The same speed anywhere else is still rejected."""
+
+    def _move(self, v, m, pts, t=100.0, st=0, fl=1):
+        """Send one movement update per point (30 Hz); returns the number of rejected updates."""
+        rejected = 0
+        for x, y, z in pts:
+            t += 1 / 30
+            msg = {"p": [x, y, z], "v": [0, 0, 0], "y": 0, "st": st, "fl": fl}
+            ok, _ = v.validate(m, msg, t, False)
+            if ok:
+                v.accept(m, msg, t, False)
+            else:
+                rejected += 1
+        return rejected
+
+    def test_conveyor_carry_is_allowed_only_on_the_belt(self):
+        mp = load_map("factory")
+        v = MoveValidator(CONFIG, mp)
+        # a boosted slide along a belt in Overdrive: faster than anyone can go on plain floor
+        speed = CONFIG["movement"]["slideMaxSpeed"] * CONFIG["netValidation"]["maxSpeedTolerance"] + 1.6 * mp.conveyor_max
+        n = int(36 / (speed / 30))
+        belt = [(-51 + i * speed / 30, 1.1, -32.75) for i in range(1, n)]
+        self.assertEqual(self._move(v, PlayerMotion([-51, 1.1, -32.75], 0, 100.0), belt), 0)
+        floor = [(-51 + i * speed / 30, 0.0, -27.0) for i in range(1, n)]
+        self.assertGreater(self._move(v, PlayerMotion([-51, 0.0, -27.0], 0, 100.0), floor), 5)
+
+    def test_water_slide_speed_is_allowed_only_along_the_slide(self):
+        mp = load_map("waterpark")
+        v = MoveValidator(CONFIG, mp)
+        ride = mp.rides[1]
+        speed = ride.vmax * 1.4  # Slide Rush
+        # resample the slide path every speed/30 metres
+        pts, step, carry = [], speed / 30, 0.0
+        for (ax, ay, az), (bx, by, bz) in zip(ride.pts, ride.pts[1:]):
+            seg = ((bx - ax) ** 2 + (by - ay) ** 2 + (bz - az) ** 2) ** 0.5
+            d = step - carry
+            while d <= seg:
+                k = d / seg
+                pts.append((ax + (bx - ax) * k, ay + (by - ay) * k, az + (bz - az) * k))
+                d += step
+            carry = seg - (d - step)
+        self.assertGreater(len(pts), 30)
+        start = list(ride.pts[0])
+        self.assertEqual(self._move(v, PlayerMotion(start, 0, 100.0), pts, st=7, fl=0), 0)
+        # the same speed on open ground far from any slide: rejected
+        x0, z0 = -60.0, -52.0
+        line = [(x0 + i * step, 0.0, z0) for i in range(1, len(pts))]
+        self.assertTrue(all(mp.is_free(x, 0.1, z, 0.36, 1.7) and not mp.near_ride(x, 0.0, z) for x, _, z in line[:40]))
+        self.assertGreater(self._move(v, PlayerMotion([x0, 0.0, z0], 0, 100.0), line[:40]), 5)
 
 
 class StaticFileTests(unittest.TestCase):
@@ -636,6 +690,107 @@ class AbilityCoinServerTests(IntegrationTests):
         spawn = await a.wait_for(t_is("coin_spawn"), timeout=2)
         self.assertIn(spawn["id"], m.coins)
         self.assertEqual(len(m.coins), CONFIG["coins"]["mapCoins"])
+
+
+class NewModesServerTests(IntegrationTests):
+    """v1.02 online: Hot Potato, Shrinking Zone, map events (coin rain) and per-player snapshot times."""
+
+    test_http_serves_index_and_blocks_server_code = None
+    test_version_mismatch_rejected = None
+    test_full_online_flow = None
+    test_reconnect_with_token_resumes_identity = None
+    test_quick_play_matches_players_and_room_capacity = None
+    test_host_migrates_when_host_leaves = None
+    test_flooding_is_rate_limited = None
+
+    async def _match(self, mode, map_id="training", n=2):
+        cs = [await self.client(name) for name in ("Ann", "Bob", "Cat", "Dan")[:n]]
+        a = cs[0]
+        await a.send({"t": "create_room", "public": False, "mode": mode, "map": map_id})
+        code = (await a.wait_for(t_is("room")))["room"]["code"]
+        for c in cs[1:]:
+            await c.send({"t": "join_room", "code": code})
+        await a.wait_for(lambda m: m.get("t") == "room" and len(m["room"]["players"]) == n)
+        for c in cs:
+            await c.send({"t": "ready", "ready": True})
+        await a.wait_for(lambda m: m.get("t") == "room" and all(p["ready"] for p in m["room"]["players"]))
+        await a.send({"t": "start_match"})
+        start = await a.wait_for(t_is("match_start"))
+        for c in cs:
+            await c.send({"t": "loaded", "matchId": start["matchId"], "loadout": []})
+        await a.wait_for(lambda m: m.get("t") == "rules" and m["rules"]["phase"] == "playing", timeout=5)
+        m = self.game.rooms[code].match
+        for i, c in enumerate(cs):
+            PerfectDodgeServerTests._place(self, m, c, [-6.0 + 4 * i, 0.0, 0.0], [0, 0, 0])
+        return m, cs, start
+
+    async def test_hot_potato_explodes_and_last_one_standing_wins(self):
+        m, (a, b), _ = await self._match("hotpotato")
+        st = m.state
+        self.assertEqual(st["mode"], "hotpotato")
+        self.assertEqual(st["potato"]["fuse"] <= CONFIG["modes"]["hotpotato"]["fuse"], True)
+        holder = next(pid for pid in st["order"] if st["players"][pid]["it"])
+        other = b.id if holder == a.id else a.id
+        st["potato"]["fuse"] = 0.05  # light it
+        ev = await a.wait_for(lambda x: x.get("t") == "event" and x["ev"]["type"] == "exploded", timeout=3)
+        self.assertEqual(ev["ev"]["id"], holder)
+        res = (await a.wait_for(t_is("match_end"), timeout=3))["result"]
+        self.assertEqual(res["winners"], [other])
+        self.assertEqual(res["reason"], "last_runner")
+
+    async def test_shrinking_zone_knocks_out_runners_left_outside(self):
+        m, (a, b, c), _ = await self._match("zone", n=3)
+        st = m.state
+        self.assertIn("zone", st)
+        snap = await a.wait_for(lambda x: x.get("t") == "rules" and "zone" in x["rules"], timeout=2)
+        self.assertGreater(snap["rules"]["zone"]["r0"], 20)
+        runners = [cl for cl in (a, b, c) if not st["players"][cl.id]["it"]]
+        out_c, in_c = runners
+        # shrink the ring to a 6 m circle round the inside runner, then leave the other runner outside
+        z = R.zone_at(st)
+        st["zone"].update(x0=z["x"], z0=z["z"], x1=z["x"], z1=z["z"], r0=6.0, r1=6.0)
+        PerfectDodgeServerTests._place(self, m, in_c, [z["x"], 0.0, z["z"]], [0, 0, 0])
+        PerfectDodgeServerTests._place(self, m, out_c, [z["x"] + 15, 0.0, z["z"]], [0, 0, 0])
+        limit = CONFIG["modes"]["zone"]["outsideLimit"]
+        ev = await a.wait_for(lambda x: x.get("t") == "event" and x["ev"]["type"] == "eliminated"
+                              and x["ev"].get("id") == out_c.id and x["ev"].get("reason") == "zone", timeout=limit + 2)
+        self.assertTrue(st["players"][out_c.id]["out"])
+        self.assertFalse(st["players"][in_c.id]["out"])
+        self.assertGreaterEqual(st["players"][out_c.id]["stormTime"], limit - 0.1)
+
+    async def test_map_event_is_announced_and_coin_rain_drops_bonus_coins(self):
+        m, (a, b), _ = await self._match("classic")
+        me = CONFIG["mapEvents"]
+        m.event_kinds = ["coinrain"]
+        m.next_event_at = m.state["time"] + me["warn"] + 0.2
+        ann = await a.wait_for(lambda x: x.get("t") == "rules" and x["rules"].get("ev"), timeout=3)
+        ev = ann["rules"]["ev"]
+        self.assertEqual(ev["kind"], "coinrain")
+        self.assertAlmostEqual(ev["end"] - ev["start"], me["events"]["coinrain"]["duration"], places=1)
+        self.assertGreater(ev["start"], ann["rules"]["time"])  # announced ahead (the warning)
+        drops = []
+        while len(drops) < 3:
+            drops.append(await b.wait_for(lambda x: x.get("t") == "coin_spawn" and x.get("drop"), timeout=me["warn"] + 2))
+        self.assertTrue(all(d["id"] in m.bonus_coins for d in drops))
+        # a bonus coin does not respawn once grabbed
+        cid = drops[0]["id"]
+        x, y, z = m.coins[cid]
+        PerfectDodgeServerTests._place(self, m, a, [x, y - 0.9, z], [0, 0, 0])
+        before = len(m.coin_respawns)
+        await a.send({"t": "pickup", "id": cid})
+        await b.wait_for(lambda x: x.get("t") == "coin_taken" and x["id"] == cid)
+        self.assertEqual(len(m.coin_respawns), before)
+        self.assertNotIn(cid, m.bonus_coins)
+
+    async def test_snapshot_rows_carry_each_players_receive_time(self):
+        m, (a, b), _ = await self._match("classic")
+        await a.send({"t": "state", "s": 1, "p": [-6.0, 0.0, 0.5], "v": [0, 0, 3], "y": 0, "st": 0, "fl": 1, "sc": 0})
+        # the first snapshot that shows the move (older ones may still be queued on the socket)
+        snap = await b.wait_for(lambda x: x.get("t") == "snap" and any(r[0] == a.id and r[3] == 0.5 for r in x["p"]), timeout=2)
+        row = next(r for r in snap["p"] if r[0] == a.id)
+        self.assertEqual(len(row), 12)
+        self.assertLessEqual(row[11], snap["ts"])
+        self.assertAlmostEqual(row[11], m.motion[a.id].last_time, places=2)
 
 
 class SocialTests(IntegrationTests):

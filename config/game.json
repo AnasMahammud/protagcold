@@ -1,12 +1,14 @@
 {
   "_comment": "Shared gameplay configuration. Read by the browser client (src/core/config.js) AND the Python server (server/config.py). Change values here, not in code.",
-  "version": "1.0.0",
+  "version": "1.02",
 
   "tick": {
+    "_comment": "netSendHz: client movement updates AND server snapshots per second. Remote players are drawn interpDelayMs in the past at most; the client adapts the delay to the measured jitter (minInterpDelayMs..interpDelayMs).",
     "simHz": 60,
-    "netSendHz": 20,
+    "netSendHz": 30,
     "serverTickHz": 30,
-    "interpDelayMs": 110
+    "interpDelayMs": 140,
+    "minInterpDelayMs": 45
   },
 
   "movement": {
@@ -140,6 +142,43 @@
       "short": "No clock. Train movement and tagging against bots. Press T to swap IT.",
       "duration": 0,
       "startingIt": 1
+    },
+    "hotpotato": {
+      "name": "Hot Potato",
+      "short": "Tagging passes the potato. When its fuse runs out, whoever holds it explodes. Last one standing wins.",
+      "duration": 0,
+      "startingIt": 1,
+      "fuse": 25,
+      "fuseMin": 12,
+      "fuseStep": 3
+    },
+    "zone": {
+      "name": "Shrinking Zone",
+      "short": "Tagged runners are out, and so is anyone caught outside the closing ring for 4 s. Last runner standing wins.",
+      "duration": 180,
+      "startingIt": 1,
+      "minRadius": 7,
+      "zoneHold": 20,
+      "zoneEnd": 160,
+      "outsideLimit": 4.0
+    }
+  },
+
+  "mapEvents": {
+    "_comment": "Dynamic map events. Times are match seconds; each map lists which events it can throw (env.events).",
+    "firstAt": [30, 45],
+    "gap": [40, 60],
+    "warn": 3,
+    "rainCoins": 18,
+    "events": {
+      "blackout": { "name": "Power Outage", "duration": 16 },
+      "coinrain": { "name": "Coin Rain", "duration": 14 },
+      "lowgrav": { "name": "Low Gravity", "duration": 16 },
+      "overdrive": { "name": "Conveyor Overdrive", "duration": 15 },
+      "slick": { "name": "Wet Floors", "duration": 16 },
+      "surge": { "name": "Speed Surge", "duration": 14 },
+      "sliderush": { "name": "Slide Rush", "duration": 18 },
+      "fog": { "name": "Fog Bank", "duration": 18 }
     }
   },
 
@@ -147,7 +186,7 @@
     "maxSpeedTolerance": 1.35,
     "maxBurstSpeed": 22.0,
     "teleportDistance": 7.0,
-    "maxMessagesPerSecond": 60,
+    "maxMessagesPerSecond": 80,
     "maxVerticalSpeed": 34.0
   },
 

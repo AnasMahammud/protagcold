@@ -39,6 +39,36 @@
         60,
         44
       ]
+    },
+    {
+      "id": "mall",
+      "name": "Overgrown Mall",
+      "theme": "mall",
+      "description": "A huge abandoned three-storey mall reclaimed by plants. Ride the escalators, cross the sky bridge, drop into the fountain.",
+      "size": [
+        120,
+        88
+      ]
+    },
+    {
+      "id": "waterpark",
+      "name": "Splash Kingdom",
+      "theme": "waterpark",
+      "description": "A sunny mega waterpark. Climb the spiral towers, ride the slides into the pools, weave through the loungers.",
+      "size": [
+        132,
+        112
+      ]
+    },
+    {
+      "id": "factory",
+      "name": "Toy Factory",
+      "theme": "factory",
+      "description": "A giant toy factory. Ride the conveyor belts, climb the toy blocks, run the catwalks and take the chute into the ball pit.",
+      "size": [
+        128,
+        100
+      ]
     }
   ]
 }

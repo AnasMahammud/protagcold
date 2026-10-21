@@ -4,7 +4,7 @@
 // Bots path-find with A* over this graph and execute links with the same controller players use.
 import { CharacterController } from '../movement/controller.js';
 
-export const LINK = Object.freeze({ WALK: 0, DROP: 1, CLIMB: 2, JUMP: 3, PAD: 4 });
+export const LINK = Object.freeze({ WALK: 0, DROP: 1, CLIMB: 2, JUMP: 3, PAD: 4, RIDE: 5 });
 const STEP = 1.25;
 const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
 
@@ -19,6 +19,8 @@ export class NavGraph {
     this._link();
     this._gapJumps();
     this._pads();
+    this._rides();
+    this.maxExpand = this.nodes.length; // a full search is cheap now (typed arrays, weighted A*)
     this.buildMs = performance.now() - t0;
   }
 
@@ -56,10 +58,19 @@ export class NavGraph {
           last = y;
           const g = w.groundBelow(x, z, r * 0.6, y + 0.05);
           if (!g || Math.abs(g.y - y) > 0.06) continue; // something else is on top here
-          const full = w.isFree(x, y + 0.03, z, r * 0.9, this.cfg.height);
+          let stair = g.collider.v === 'step' || !!g.collider.ramp;
+          let full = w.isFree(x, y + 0.03, z, r * 0.9, this.cfg.height);
+          if (!full) {
+            // right next to a small step (the foot of a staircase, a curb): still a place to stand
+            const lift = this.cfg.stepHeight * 0.9;
+            if (w.isFree(x, y + lift, z, r * 0.9, this.cfg.height - lift + 0.03)) {
+              full = true;
+              stair = true;
+            }
+          }
           const low = !full && w.isFree(x, y + 0.03, z, r * 0.9, this.cfg.slideHeight + 0.05);
           if (!full && !low) continue;
-          const node = { id: this.nodes.length, x, y, z, ix, iz, low, links: [], surface: g.collider.m };
+          const node = { id: this.nodes.length, x, y, z, ix, iz, low, stair, links: [], surface: g.collider.m };
           this.nodes.push(node);
           list.push(node);
         }
@@ -75,16 +86,22 @@ export class NavGraph {
     const lo = Math.min(a.y, b.y);
     const low = a.low || b.low;
     const h = low ? this.cfg.slideHeight : this.cfg.height * 0.95;
+    const stair = a.stair || b.stair;
+    let prev = a.y;
     for (let i = 1; i <= 3; i++) {
       const t = i / 4;
       const x = a.x + (b.x - a.x) * t;
       const z = a.z + (b.z - a.z) * t;
       const g = w.groundBelow(x, z, 0.2, hi + step);
       if (!g || g.y < lo - step - 0.05) return false;
+      // stairs and slopes: every quarter of the way may rise at most one step
+      if (Math.abs(g.y - prev) > step + 0.05) return false;
+      prev = g.y;
       const y = a.y + (b.y - a.y) * t;
-      if (!w.isFree(x, Math.max(g.y, y) + 0.05, z, this.cfg.radius * 0.8, h)) return false;
+      const lift = stair ? step * 0.9 : 0.05;
+      if (!w.isFree(x, Math.max(g.y, y) + lift, z, this.cfg.radius * 0.8, h - (stair ? lift : 0))) return false;
     }
-    return true;
+    return Math.abs(b.y - prev) <= step + 0.05;
   }
 
   _link() {
@@ -96,8 +113,10 @@ export class NavGraph {
         const dist = Math.hypot(dx, dz) * STEP;
         for (const b of list) {
           const dy = b.y - a.y;
-          if (Math.abs(dy) <= step + 0.05) {
-            if (this._walkable(a, b)) a.links.push({ to: b.id, type: LINK.WALK, cost: dist * (b.low ? 1.6 : 1) });
+          // stairs and ramps rise up to ~0.9 m between neighbouring nodes and are still a walk
+          if (Math.abs(dy) <= step + 0.05 || ((a.stair || b.stair) && Math.abs(dy) <= 0.95 && this._walkable(a, b))) {
+            if (this._walkable(a, b)) a.links.push({ to: b.id, type: LINK.WALK, cost: dist * (b.low ? 1.6 : 1) + Math.abs(dy) * 0.3 });
+            else if (dy < -step - 0.05 && dy > -9) a.links.push({ to: b.id, type: LINK.DROP, cost: dist + 0.4 - dy * 0.05 });
           } else if (dy < 0 && dy > -9) {
             // walking off a ledge: the space above b at a's height must be open
             const mx = (a.x + b.x) / 2, mz = (a.z + b.z) / 2;
@@ -173,6 +192,29 @@ export class NavGraph {
     }
   }
 
+  _rides() {
+    // water slides: entry node -> wherever the real controller comes out after riding it
+    for (const r of this.world.rides) {
+      const e = r.pts[0];
+      const from = this.nearest(e.x, e.y, e.z, 2.5);
+      if (!from) continue;
+      const ctrl = new CharacterController(this.world, this.cfg);
+      ctrl.teleport(e.x, e.y, e.z);
+      let landed = null;
+      for (let i = 0; i < 1200; i++) {
+        ctrl.step({ mx: 0, mz: 0 }, 1 / 60);
+        if (i > 10 && !ctrl.ride && ctrl.grounded) {
+          landed = { ...ctrl.pos };
+          break;
+        }
+      }
+      if (!landed) continue;
+      const to = this.nearest(landed.x, landed.y, landed.z, 3);
+      if (!to || to.id === from.id) continue;
+      from.links.push({ to: to.id, type: LINK.RIDE, cost: 4 });
+    }
+  }
+
   nearest(x, y, z, maxDist = 4) {
     const ix = Math.round((x - this.ox) / STEP);
     const iz = Math.round((z - this.oz) / STEP);
@@ -195,41 +237,59 @@ export class NavGraph {
     return bd <= maxDist * 3 ? best : null;
   }
 
-  /** A* search. Returns array of { node, link } (link used to ENTER node) or null. */
-  findPath(startId, goalId, maxExpand = 7000) {
+  /**
+   * A* search (weighted 1.25: a few percent longer paths for far fewer expansions on big maps).
+   * Returns array of { node, link } (link used to ENTER node) or null.
+   */
+  findPath(startId, goalId, maxExpand = this.maxExpand || 7000) {
     if (startId === goalId) return [{ node: this.nodes[goalId], link: null }];
     const nodes = this.nodes;
+    const N = nodes.length;
+    if (!this._g || this._g.length !== N) {
+      this._g = new Float64Array(N);
+      this._seen = new Uint32Array(N);
+      this._done = new Uint32Array(N);
+      this._from = new Int32Array(N);
+      this._via = new Array(N);
+      this._gen = 0;
+    }
+    const gen = (this._gen = (this._gen + 1) >>> 0 || 1);
+    const g = this._g, seen = this._seen, done = this._done, from = this._from, via = this._via;
     const goal = nodes[goalId];
     const open = new MinHeap();
-    const g = new Map();
-    const came = new Map();
-    g.set(startId, 0);
+    g[startId] = 0;
+    seen[startId] = gen;
+    from[startId] = -1;
     open.push(startId, 0);
     let expanded = 0;
+    let found = false;
     while (open.size) {
       const cur = open.pop();
-      if (cur === goalId) break;
+      if (done[cur] === gen) continue;
+      done[cur] = gen;
+      if (cur === goalId) {
+        found = true;
+        break;
+      }
       if (++expanded > maxExpand) return null;
-      const n = nodes[cur];
-      const gc = g.get(cur);
-      for (const l of n.links) {
+      const gc = g[cur];
+      for (const l of nodes[cur].links) {
+        const to = l.to;
+        if (done[to] === gen) continue;
         const ng = gc + l.cost;
-        if (ng < (g.has(l.to) ? g.get(l.to) : Infinity)) {
-          g.set(l.to, ng);
-          came.set(l.to, { from: cur, link: l });
-          const m = nodes[l.to];
-          open.push(l.to, ng + Math.hypot(m.x - goal.x, m.z - goal.z, (m.y - goal.y) * 0.7));
+        if (seen[to] !== gen || ng < g[to]) {
+          seen[to] = gen;
+          g[to] = ng;
+          from[to] = cur;
+          via[to] = l;
+          const m = nodes[to];
+          open.push(to, ng + 1.25 * Math.hypot(m.x - goal.x, m.z - goal.z, (m.y - goal.y) * 0.7));
         }
       }
     }
-    if (!came.has(goalId)) return null;
+    if (!found) return null;
     const path = [];
-    let c = goalId;
-    while (c !== startId) {
-      const e = came.get(c);
-      path.push({ node: nodes[c], link: e.link });
-      c = e.from;
-    }
+    for (let c = goalId; c !== startId; c = from[c]) path.push({ node: nodes[c], link: via[c] });
     path.reverse();
     return path;
   }

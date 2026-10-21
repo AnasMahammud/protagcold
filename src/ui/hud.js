@@ -6,7 +6,7 @@ import { audio } from '../audio/audio.js';
 import { abilityIcon, COIN_SVG } from './abilityIcons.js';
 import { ABILITY_INFO } from '../gameplay/abilities.js';
 
-const MODE_NAMES = { classic: 'Classic Tag', infection: 'Infection', elimination: 'Last Runner', practice: 'Practice' };
+const MODE_NAMES = { classic: 'Classic Tag', infection: 'Infection', elimination: 'Last Runner', practice: 'Practice', hotpotato: 'Hot Potato', zone: 'Shrinking Zone' };
 
 export class Hud {
   constructor(root) {
@@ -18,6 +18,8 @@ export class Hud {
         <div class="mode"></div>
         <div class="clock">0:00</div>
         <div class="itline hidden"></div>
+        <div class="zonebar hidden"><i class="zarrow"></i><span></span></div>
+        <div class="eventbar hidden"><b></b><span></span></div>
       </div>
       <div class="tl">
         <div class="objective"></div>
@@ -60,6 +62,8 @@ export class Hud {
       dodgeLabel: q('.ability.dodge .ab-label'),
       crosshair: q('.crosshair'), abslots: q('.abslots'), coins: q('.coinsbox'), coinsN: q('.coinsbox span'), coinsPop: q('.coinsbox em'),
       cloakfx: q('.cloakfx'),
+      zonebar: q('.zonebar'), zoneText: q('.zonebar span'), zoneArrow: q('.zonebar .zarrow'),
+      eventbar: q('.eventbar'), eventTitle: q('.eventbar b'), eventText: q('.eventbar span'),
     };
     this.cache = {};
     this.bannerTimer = null;
@@ -98,13 +102,19 @@ export class Hud {
     this._set('mode', e.mode, 'text', MODE_NAMES[s.mode] || s.mode);
     let clock = s.clock;
     if (s.phase === 'countdown') clock = String(Math.ceil(s.countdown));
+    else if (s.fuse != null) clock = s.fuse < 10 ? s.fuse.toFixed(1) : String(Math.ceil(s.fuse)); // hot potato: the fuse IS the clock
     this._set('clock', e.clock, 'text', clock);
-    const low = s.phase === 'playing' && s.timeLeft < 15;
+    const low = s.phase === 'playing' && (s.fuse != null ? s.fuse < 6 : s.timeLeft < 15);
     if (this.cache.low !== low) {
       this.cache.low = low;
       e.clock.classList.toggle('low', low);
     }
-    const itText = s.its.length ? `${s.mode === 'infection' ? '☣ INFECTED' : '🔥 IT'}: ${s.its.length > 3 ? `${s.its.length} players` : s.its.join(', ')}` : '';
+    if (this.cache.fuseMode !== (s.fuse != null)) {
+      this.cache.fuseMode = s.fuse != null;
+      e.clock.classList.toggle('fuse', s.fuse != null);
+    }
+    const itLabel = s.mode === 'infection' ? '☣ INFECTED' : s.mode === 'hotpotato' ? `💣 POTATO${s.potatoRound ? ` · ROUND ${s.potatoRound}` : ''}` : '🔥 IT';
+    const itText = s.its.length ? `${itLabel}: ${s.its.length > 3 ? `${s.its.length} players` : s.its.join(', ')}` : '';
     this._set('it', e.itline, 'text', itText);
     this._set('itH', e.itline, 'hidden', !itText);
     if (this.cache.inf !== (s.mode === 'infection')) {
@@ -112,10 +122,10 @@ export class Hud {
       e.itline.classList.toggle('infection', this.cache.inf);
     }
     this._set('obj', e.objective, 'text', s.spectating ? `Spectating ${s.spectating} — Jump to switch` : s.objective);
-    const counts = s.mode === 'infection' || s.mode === 'elimination' ? `${s.runners} runner${s.runners === 1 ? '' : 's'} left · ${plural(s.total, 'player')}` : plural(s.total, 'player');
+    const counts = s.mode === 'hotpotato' ? `${s.alive} still standing · ${plural(s.total, 'player')}` : ['infection', 'elimination', 'zone'].includes(s.mode) ? `${s.runners} runner${s.runners === 1 ? '' : 's'} left · ${plural(s.total, 'player')}` : plural(s.total, 'player');
     this._set('counts', e.counts, 'text', counts);
     this._set('tags', e.tags, 'html', `${s.tags}<small>TAGS</small>`);
-    this._set('fps', e.fps, 'text', settings.data.graphics.showFps ? `${Math.round(extra.fps)} FPS` : '');
+    this._set('fps', e.fps, 'text', settings.data.graphics.showFps ? `${Math.round(extra.fps)} FPS${extra.resScale && extra.resScale < 1 ? ` · ${Math.round(extra.resScale * 100)}% res` : ''}` : '');
     this._set('net', e.net, 'text', s.net || '');
 
     // stamina & abilities
@@ -137,6 +147,8 @@ export class Hud {
     }
     this._perfectHud(s);
     this._abilityHud(s);
+    this._zoneHud(s);
+    this._eventHud(s);
     let status = '';
     if (s.stunned) status = 'STUNNED — you got perfect-dodged!';
     else if (s.frozen) status = 'STUNNED — new IT';
@@ -248,6 +260,49 @@ export class Hud {
       e.cloakfx.classList.toggle('on', !!s.cloaked);
     }
     this._set('coinsN', e.coinsN, 'text', String(s.coinsGrabbed || 0));
+  }
+
+  /** Shrinking Zone: when the ring closes, how far it is, and a loud warning when you're outside. */
+  _zoneHud(s) {
+    const e = this.el;
+    const z = s.zone;
+    this._set('zoneH', e.zonebar, 'hidden', !z || s.phase !== 'playing');
+    if (!z || s.phase !== 'playing') {
+      // match over / next match: never leave the red "outside the ring" vignette behind
+      if (this.cache.zOut) {
+        this.cache.zOut = false;
+        e.zonebar.classList.remove('out');
+        e.vignette.classList.remove('zone');
+      }
+      return;
+    }
+    let text;
+    if (z.outside) text = `GET IN THE RING! ${Math.max(0, z.limit - z.storm).toFixed(1)} s · ${Math.round(z.dist)} m`;
+    else if (z.closingIn > 0) text = `Ring closes in ${Math.ceil(z.closingIn)} s`;
+    else if (z.k < 1) text = `Ring closing · ${Math.round(z.r)} m wide`;
+    else text = `Final ring · ${Math.round(z.r)} m`;
+    this._set('zoneT', e.zoneText, 'text', text);
+    if (this.cache.zOut !== z.outside) {
+      this.cache.zOut = z.outside;
+      e.zonebar.classList.toggle('out', z.outside);
+      e.vignette.classList.toggle('zone', z.outside && !settings.data.accessibility.reduceFlashing);
+    }
+    e.zoneArrow.style.transform = `rotate(${((z.angle * 180) / Math.PI).toFixed(1)}deg)`;
+    this._set('zArrowH', e.zoneArrow, 'hidden', !z.outside);
+  }
+
+  /** Map events (power outage, coin rain...): title + time left. */
+  _eventHud(s) {
+    const e = this.el;
+    const ev = s.mapEvent;
+    this._set('evH', e.eventbar, 'hidden', !ev);
+    if (!ev) return;
+    this._set('evT', e.eventTitle, 'text', `${ev.icon} ${ev.name}`);
+    this._set('evS', e.eventText, 'text', ev.warning ? 'incoming…' : `${Math.ceil(ev.left)} s`);
+    if (this.cache.evWarn !== !!ev.warning) {
+      this.cache.evWarn = !!ev.warning;
+      e.eventbar.classList.toggle('warn', !!ev.warning);
+    }
   }
 
   coinPop({ value }) {

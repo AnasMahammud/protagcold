@@ -95,6 +95,20 @@ class MoveValidator:
             refill += motion.grant_speed * self.nv["maxSpeedTolerance"]
             cap += motion.grant_dist + motion.grant_speed * 0.3
             extra_v, extra_vy = motion.grant_speed, motion.grant_vy
+        m = self.map
+        if m.conveyor_max:
+            # standing on a conveyor / escalator (both ends checked: a belt can't be used as a launcher)
+            zn = m.zone_at(*motion.pos)
+            if zn is not None and zn.k == "conveyor":
+                refill += m.conveyor_max * 2.2  # event "overdrive" doubles belt speed
+                extra_v = max(extra_v, m.conveyor_max * 2.2)
+        if m.rides and m.near_ride(*motion.pos) and m.near_ride(x, y, z):
+            # riding a water slide: the whole move must stay on the slide's path
+            vmax = m.ride_vmax * 1.5  # the Slide Rush event speeds every slide up by 50%
+            refill += vmax * self.nv["maxSpeedTolerance"]
+            cap += vmax * 0.5
+            extra_v = max(extra_v, vmax)
+            extra_vy = max(extra_vy, vmax)
         budget = min(cap, motion.budget + refill * dt)
         if horiz > budget + 0.05:
             return False, "too_fast"
@@ -118,7 +132,7 @@ class MoveValidator:
         y = msg.get("y", motion.yaw)
         motion.yaw = float(y) if _finite(y) else motion.yaw
         st = msg.get("st", 0)
-        motion.st = int(st) if isinstance(st, int) and 0 <= st <= 6 else 0  # 6 = grapple
+        motion.st = int(st) if isinstance(st, int) and 0 <= st <= 7 else 0  # 6 = grapple, 7 = water slide
         fl = msg.get("fl", 0)
         motion.fl = int(fl) & 3 if isinstance(fl, int) else 0
         sc = msg.get("sc", 0)

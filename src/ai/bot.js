@@ -87,8 +87,11 @@ export class BotBrain {
       // runners always track IT (the HUD shows IT to humans too); chasers need sight or sound
       if (p.cloaked && dist > 3) continue; // cloaked: invisible unless right next to you
       const knowsAlways = p.it && !self.it;
-      let seen = knowsAlways || dist < HEAR_RADIUS;
-      if (!seen && dist < 60) seen = w.lineOfSight(eye, { x: p.pos.x, y: p.pos.y + 1.4, z: p.pos.z });
+      // power outage: everyone is near-blind (IT's glowing crown still gives them away)
+      const hear = ctx.dark ? 5 : HEAR_RADIUS;
+      const sight = ctx.dark ? (p.it ? 30 : 12) : 60;
+      let seen = knowsAlways || dist < hear;
+      if (!seen && dist < sight) seen = w.lineOfSight(eye, { x: p.pos.x, y: p.pos.y + 1.4, z: p.pos.z });
       if (seen) this.known.set(p.id, { x: p.pos.x, y: p.pos.y, z: p.pos.z, vx: p.vel.x, vz: p.vel.z, t: this.time, it: p.it });
     }
   }
@@ -154,8 +157,27 @@ export class BotBrain {
     const pos = me.ctrl.pos;
     this.repathT -= dt;
     this.directSteer = null;
+    this.zone = ctx.zone || null;
+    // Shrinking Zone: runners get back inside the ring before anything else
+    let zoneRun = false;
+    if (this.zone && !self.it) {
+      const z = this.zone;
+      if (Math.hypot(pos.x - z.x, pos.z - z.z) > z.r - 2.5) {
+        zoneRun = true;
+        if (!this.zoneRun || this.repathT <= 0 || !this.path) {
+          const a = this.rng() * Math.PI * 2, rr = this.rng() * z.r * 0.45;
+          const n = this.nav.nearest(z.x + Math.cos(a) * rr, pos.y, z.z + Math.sin(a) * rr, 12) || this.nav.nearest(z.x, 0, z.z, 24);
+          if (n) this._pathToNode(n);
+          this.repathT = 0.8;
+        }
+        this.wantSprint = true;
+      }
+    }
+    this.zoneRun = zoneRun;
 
-    if (this.role === 'chase' && this.targetId) {
+    if (zoneRun) {
+      // (path set above)
+    } else if (this.role === 'chase' && this.targetId) {
       const k = this.known.get(this.targetId);
       const tgt = ctx.players.find((p) => p.id === this.targetId);
       if (k && tgt) {
@@ -171,6 +193,8 @@ export class BotBrain {
           this.repathT = this.d.repath * (0.8 + this.rng() * 0.4);
         }
         this.wantSprint = dist < 22 && me.ctrl.stamina > 5 && this.rng() < this.d.sprintUse + 0.3;
+        // hot potato: the fuse is burning down, run flat out
+        if (ctx.fuse != null && ctx.fuse < 8) this.wantSprint = me.ctrl.stamina > 2;
       }
     } else if (this.role === 'search') {
       if (!this.path || this.repathT <= 0) {
@@ -220,7 +244,9 @@ export class BotBrain {
       // wander: stroll between interesting spots, conserve stamina
       if (!this.path || this.repathT <= 0) {
         const coin = ctx.coins?.length && this.rng() < 0.6 ? nearestOf(ctx.coins, pos, 30) : null;
-        const n = coin ? this.nav.nearest(coin.x, coin.y - 0.9, coin.z, 3) || this.nav.randomNode(this.rng, pos, 25) : this.nav.randomNode(this.rng, pos, 25);
+        const area = this.zone ? { x: this.zone.x, z: this.zone.z } : pos;
+        const radius = this.zone ? Math.max(6, this.zone.r * 0.75) : 25;
+        const n = coin && !this.zone ? this.nav.nearest(coin.x, coin.y - 0.9, coin.z, 3) || this.nav.randomNode(this.rng, area, radius) : this.nav.randomNode(this.rng, area, radius);
         if (n) this._pathToNode(n);
         this.repathT = 4 + this.rng() * 4;
       }
@@ -327,6 +353,7 @@ export class BotBrain {
       let score = dThreat - dSelf * 0.45 - (dot > 0.2 ? 25 * dot : 0);
       if (this.d.usesMoves) score += Math.min(8, n.links.length) * 0.5 + (n.y - me.y) * 0.4; // escape options & high ground
       if (this.rng() < this.d.mistakeRate) score += (this.rng() - 0.5) * 30; // imperfect decisions
+      if (this.zone && Math.hypot(n.x - this.zone.x, n.z - this.zone.z) > this.zone.r - 3) score -= 80; // never flee out of the ring
       if (score > bestScore) {
         bestScore = score;
         best = n;
@@ -354,6 +381,8 @@ export class BotBrain {
       this.path = path;
       this.pathIdx = 0;
       this.goalId = goal.id;
+    } else {
+      this.repathT = Math.max(this.repathT, 1.5); // unreachable from here: don't search again every tick
     }
   }
 

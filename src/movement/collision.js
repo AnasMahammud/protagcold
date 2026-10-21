@@ -43,8 +43,25 @@ export class CollisionWorld {
     this.bounds = map.bounds; // [x0, z0, x1, z1]
     this.killY = map.killY ?? -12;
     this.pads = (map.pads || []).map((p) => ({ x: p.p[0], y: p.p[1], z: p.p[2], vx: p.v[0], vy: p.v[1], vz: p.v[2], r: p.r || 0.9 }));
+    // zones: water (slows you) and conveyors / escalators (carry you); rides: water slides
+    this.zones = (map.zones || []).map(parseZone);
+    this.rides = (map.rides || []).map((r, i) => makeRide(r, i));
+    this.conveyorScale = 1; // map events can reverse / speed up every belt at once
     this._stamp = 1;
     this._buildGrid();
+  }
+
+  /** The zone containing a point (feet position), or null. */
+  zoneAt(x, y, z) {
+    for (const zn of this.zones) {
+      if (y < zn.y0 || y > zn.y1) continue;
+      if (zn.cx !== undefined) {
+        const dx = x - zn.cx, dz = z - zn.cz;
+        if (dx * dx + dz * dz > zn.r2) continue;
+      } else if (x < zn.x0 || x > zn.x1 || z < zn.z0 || z > zn.z1) continue;
+      return zn;
+    }
+    return null;
   }
 
   _buildGrid() {
@@ -261,6 +278,55 @@ export class CollisionWorld {
     if (pos.z < z0 + r) pos.z = z0 + r;
     if (pos.z > z1 - r) pos.z = z1 - r;
   }
+}
+
+function parseZone(z) {
+  const out = { k: z.k, s: z.s ?? 1, vx: z.v?.[0] ?? 0, vz: z.v?.[1] ?? 0 };
+  if (z.c) {
+    out.cx = z.c[0];
+    out.cz = z.c[1];
+    out.r2 = z.r * z.r;
+    out.y0 = z.y[0];
+    out.y1 = z.y[1];
+  } else {
+    [out.x0, out.y0, out.z0, out.x1, out.y1, out.z1] = z.b;
+  }
+  return out;
+}
+
+/** A ride (water slide): a dense polyline with arc lengths, sampled by distance travelled. */
+function makeRide(r, id) {
+  const pts = r.pts.map(([x, y, z]) => ({ x, y, z }));
+  const L = [0];
+  for (let i = 1; i < pts.length; i++) L.push(L[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y, pts[i].z - pts[i - 1].z));
+  return {
+    id,
+    pts,
+    L,
+    len: L[L.length - 1],
+    r: r.r || 1.1,
+    vmax: r.vmax || 16,
+    /** Position and unit tangent at arc length s. */
+    at(s, out) {
+      let lo = 0, hi = L.length - 1;
+      s = Math.max(0, Math.min(this.len, s));
+      while (hi - lo > 1) {
+        const mid = (lo + hi) >> 1;
+        if (L[mid] <= s) lo = mid;
+        else hi = mid;
+      }
+      const a = pts[lo], b = pts[hi];
+      const seg = L[hi] - L[lo] || 1;
+      const t = (s - L[lo]) / seg;
+      out.x = a.x + (b.x - a.x) * t;
+      out.y = a.y + (b.y - a.y) * t;
+      out.z = a.z + (b.z - a.z) * t;
+      out.tx = (b.x - a.x) / seg;
+      out.ty = (b.y - a.y) / seg;
+      out.tz = (b.z - a.z) / seg;
+      return out;
+    },
+  };
 }
 
 export function circleOverlapsRect(x, z, r, c) {

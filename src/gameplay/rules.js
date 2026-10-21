@@ -2,11 +2,17 @@
 // Offline matches run this directly. Online matches run the Python port in server/rules.py,
 // and BOTH implementations are checked against tests/shared/rules_cases.json for parity.
 //
-// Modes: classic, infection, elimination (Last Runner), practice.
+// Modes: classic, infection, elimination (Last Runner), practice, hotpotato, zone.
 
-export const MODES = ['classic', 'infection', 'elimination', 'practice'];
+export const MODES = ['classic', 'infection', 'elimination', 'practice', 'hotpotato', 'zone'];
+// modes where tagged / exploded / caught players are out (and late joiners spectate)
+const KNOCKOUT = new Set(['elimination', 'hotpotato', 'zone']);
 
-export function createMatch({ mode, players, startIt, cfg, countdown }) {
+/**
+ * `zone` (Shrinking Zone only): { x0, z0, x1, z1, r0 } = where the ring starts (centre + radius)
+ * and where it ends up; the final radius and timing come from cfg.modes.zone.
+ */
+export function createMatch({ mode, players, startIt, cfg, countdown, zone }) {
   if (!MODES.includes(mode)) throw new Error(`Unknown mode ${mode}`);
   const modeCfg = cfg.modes[mode];
   const state = {
@@ -22,6 +28,14 @@ export function createMatch({ mode, players, startIt, cfg, countdown }) {
     result: null,
     tagCount: 0,
   };
+  if (mode === 'hotpotato') {
+    // the potato's fuse burns while it is held; it never resets on a tag (that's the point)
+    state.potato = { fuse: modeCfg.fuse, max: modeCfg.fuse, min: modeCfg.fuseMin, step: modeCfg.fuseStep, round: 1 };
+  }
+  if (mode === 'zone') {
+    const z = zone || { x0: 0, z0: 0, x1: 0, z1: 0, r0: 60 };
+    state.zone = { x0: z.x0, z0: z.z0, x1: z.x1, z1: z.z1, r0: z.r0, r1: modeCfg.minRadius, hold: modeCfg.zoneHold, end: modeCfg.zoneEnd, limit: modeCfg.outsideLimit };
+  }
   for (const p of players) addPlayer(state, p.id, p.name);
   state.phase = state.countdown > 0 ? 'countdown' : 'playing';
   for (const id of startIt) {
@@ -60,11 +74,12 @@ export function addPlayer(state, id, name) {
     perfectDodges: 0,
     lastPerfectAt: -1e9,
     coinsPicked: 0,
+    stormTime: 0,
   };
-  // Late joiners in infection join the infected; in elimination they spectate.
+  // Late joiners in infection join the infected; in knockout modes they spectate.
   if (state.phase === 'playing') {
     if (state.mode === 'infection') { p.it = true; p.wasIt = true; }
-    if (state.mode === 'elimination') { p.out = true; p.outAt = state.time; }
+    if (KNOCKOUT.has(state.mode)) { p.out = true; p.outAt = state.time; }
     p.protectedUntil = state.time + state.tagCfg.spawnProtection;
   }
   state.players[id] = p;
@@ -99,7 +114,11 @@ export function tick(state, dt) {
       if (p.it) p.itTime += dt;
       else p.aliveTime += dt;
     }
-    if (state.duration > 0 && state.time >= state.duration) {
+    if (state.potato) {
+      state.potato.fuse -= dt;
+      if (state.potato.fuse <= 0) out.push(...explode(state));
+    }
+    if (state.phase === 'playing' && state.duration > 0 && state.time >= state.duration) {
       out.push(...endMatch(state, 'time'));
     }
   }
@@ -125,6 +144,64 @@ export function canTag(state, taggerId, targetId) {
   return { ok: true, reason: 'ok' };
 }
 
+/**
+ * Hot potato: the fuse ran out. Whoever holds the potato is out; it goes to the remaining player
+ * who has held it the least (ties: join order) with a shorter fuse.
+ */
+function explode(state) {
+  const evs = [];
+  for (const h of itPlayers(state)) {
+    h.out = true;
+    h.outAt = state.time;
+    h.it = false;
+    evs.push({ type: 'exploded', id: h.id, time: state.time });
+  }
+  const alive = live(state).filter((p) => !p.out);
+  const pt = state.potato;
+  if (alive.length >= 2) {
+    const next = alive.slice().sort((a, b) => a.itTime - b.itTime || state.order.indexOf(a.id) - state.order.indexOf(b.id))[0];
+    next.it = true;
+    next.wasIt = true;
+    next.frozenUntil = state.time + state.tagCfg.newItFreeze;
+    next.lastTagAt = state.time;
+    pt.round++;
+    pt.max = Math.max(pt.min, pt.max - pt.step);
+    evs.push({ type: 'it', id: next.id, from: null, reason: 'potato' });
+  }
+  pt.fuse = pt.max;
+  evs.push(...checkEnd(state));
+  return evs;
+}
+
+/**
+ * Shrinking zone: call every step for every player with whether they stand outside the ring.
+ * Runners outside it too long are out. Returns events.
+ */
+export function zoneTick(state, id, dt, outside) {
+  const z = state.zone;
+  const p = state.players[id];
+  if (!z || state.phase !== 'playing' || !p || !p.connected || p.out || p.it) return [];
+  if (!outside) {
+    p.stormTime = Math.max(0, p.stormTime - dt * 0.5);
+    return [];
+  }
+  p.stormTime += dt;
+  if (p.stormTime < z.limit) return [];
+  p.out = true;
+  p.outAt = state.time;
+  const ev = { type: 'eliminated', id, by: null, reason: 'zone' };
+  state.events.push(ev);
+  return [ev, ...checkEnd(state)];
+}
+
+/** The ring at time t: { x, z, r, k } (k: 0 before it starts closing, 1 once fully closed). */
+export function zoneAt(state, t = state.time) {
+  const z = state.zone;
+  if (!z) return null;
+  const k = Math.max(0, Math.min(1, (t - z.hold) / (z.end - z.hold)));
+  return { x: z.x0 + (z.x1 - z.x0) * k, z: z.z0 + (z.z1 - z.z0) * k, r: z.r0 + (z.r1 - z.r0) * k, k };
+}
+
 /** Validate and apply a tag. Returns { ok, reason, events }. A rejected tag changes nothing. */
 export function applyTag(state, taggerId, targetId) {
   const check = canTag(state, taggerId, targetId);
@@ -140,7 +217,7 @@ export function applyTag(state, taggerId, targetId) {
   state.tagCount++;
   events.push({ type: 'tag', tagger: taggerId, target: targetId, time: now, seq: state.tagCount });
 
-  if (state.mode === 'classic' || state.mode === 'practice') {
+  if (state.mode === 'classic' || state.mode === 'practice' || state.mode === 'hotpotato') {
     a.it = false;
     b.it = true;
     b.wasIt = true;
@@ -155,7 +232,7 @@ export function applyTag(state, taggerId, targetId) {
     b.frozenUntil = now + t.newItFreeze;
     b.lastTagAt = now;
     events.push({ type: 'infected', id: targetId, by: taggerId });
-  } else if (state.mode === 'elimination') {
+  } else if (state.mode === 'elimination' || state.mode === 'zone') {
     b.out = true;
     b.outAt = now;
     events.push({ type: 'eliminated', id: targetId, by: taggerId });
@@ -249,8 +326,12 @@ export function checkEnd(state) {
   if (players.length < 2) return endMatch(state, 'players');
   if (state.phase !== 'playing') return [];
   if (state.mode === 'infection' && runners(state).length === 0) return endMatch(state, 'all_infected');
-  if (state.mode === 'elimination') {
+  if (state.mode === 'elimination' || state.mode === 'zone') {
     const alive = runners(state);
+    if (alive.length <= 1) return endMatch(state, alive.length === 1 ? 'last_runner' : 'all_out');
+  }
+  if (state.mode === 'hotpotato') {
+    const alive = players.filter((p) => !p.out);
     if (alive.length <= 1) return endMatch(state, alive.length === 1 ? 'last_runner' : 'all_out');
   }
   return [];
@@ -287,8 +368,17 @@ export function computeResult(state, reason) {
       winners = all.filter((p) => p.it && p.connected).map((p) => p.id);
     }
     ranked = all.slice().sort((a, b) => gone(a) - gone(b) || Number(a.it) - Number(b.it) || b.aliveTime - a.aliveTime || b.tags - a.tags || cmp(a.id, b.id));
+  } else if (state.mode === 'hotpotato') {
+    // the last one(s) still holding together win; then whoever exploded LATER ranks higher
+    winners = all.filter((p) => !p.out && p.connected).map((p) => p.id);
+    const outAt = (p) => (p.out ? p.outAt : Infinity);
+    ranked = all.slice().sort((a, b) => {
+      const wa = winners.includes(a.id) ? 0 : 1;
+      const wb = winners.includes(b.id) ? 0 : 1;
+      return wa - wb || gone(a) - gone(b) || (outAt(b) - outAt(a) || 0) || a.itTime - b.itTime || cmp(a.id, b.id);
+    });
   } else {
-    // elimination
+    // elimination, zone
     const alive = all.filter((p) => !p.it && !p.out && p.connected);
     if (alive.length > 0) {
       team = 'runners';
@@ -329,7 +419,7 @@ export function computeResult(state, reason) {
 
 /** Compact snapshot sent over the network / used by the HUD. */
 export function snapshot(state) {
-  return {
+  const snap = {
     mode: state.mode,
     phase: state.phase,
     countdown: round2(state.countdown),
@@ -337,9 +427,12 @@ export function snapshot(state) {
     duration: state.duration,
     players: state.order.map((id) => {
       const p = state.players[id];
-      return { id, it: p.it, out: p.out, tags: p.tags, itTime: round2(p.itTime), alive: round2(p.aliveTime), c: p.connected, fz: round2(Math.max(0, p.frozenUntil - state.time)), pr: round2(Math.max(0, p.protectedUntil - state.time)), bo: round2(Math.max(0, p.boostUntil - state.time)), pd: p.perfectDodges, co: p.coinsPicked };
+      return { id, it: p.it, out: p.out, tags: p.tags, itTime: round2(p.itTime), alive: round2(p.aliveTime), c: p.connected, fz: round2(Math.max(0, p.frozenUntil - state.time)), pr: round2(Math.max(0, p.protectedUntil - state.time)), bo: round2(Math.max(0, p.boostUntil - state.time)), pd: p.perfectDodges, co: p.coinsPicked, st: round2(p.stormTime) };
     }),
   };
+  if (state.potato) snap.potato = { fuse: round2(state.potato.fuse), max: state.potato.max, round: state.potato.round };
+  if (state.zone) snap.zone = { ...state.zone };
+  return snap;
 }
 
 export function timeLeft(state) {

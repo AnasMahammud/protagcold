@@ -21,7 +21,7 @@ with open(os.path.join(ROOT, "tests", "shared", "rules_cases.json"), encoding="u
 
 def run_case(case):
     c = case["create"]
-    state = R.create_match(c["mode"], [{"id": p, "name": p.upper()} for p in c["players"]], c["it"], CONFIG, countdown=c["countdown"])
+    state = R.create_match(c["mode"], [{"id": p, "name": p.upper()} for p in c["players"]], c["it"], CONFIG, countdown=c["countdown"], zone=c.get("zone"))
     for i, step in enumerate(case["steps"]):
         where = f"{case['name']} / step {i}: {step}"
         if "tick" in step:
@@ -48,6 +48,10 @@ def run_case(case):
             if "ok" in exp:
                 assert got == exp["ok"], f"{where}: collect={got}"
             continue
+        if "zone" in step:
+            R.zone_tick(state, step["zone"][0], step["zone"][1], step["zone"][2])
+        if "join" in step:
+            R.add_player(state, step["join"])
         if "leave" in step:
             R.remove_player(state, step["leave"])
         if "protect" in step:
@@ -91,6 +95,16 @@ def check(state, exp, where):
         for pid, v in exp["boost"].items():
             left = max(0.0, players[pid]["boostUntil"] - state["time"])
             assert abs(left - v) < 0.01, f"{where}: boost[{pid}]={left}"
+    if "potato" in exp:
+        for k, v in exp["potato"].items():
+            assert abs(state["potato"][k] - v) < 0.01, f"{where}: potato.{k}={state['potato'][k]}"
+    if "storm" in exp:
+        for pid, v in exp["storm"].items():
+            assert abs(players[pid]["stormTime"] - v) < 0.01, f"{where}: storm[{pid}]={players[pid]['stormTime']}"
+    if "zoneAt" in exp:
+        z = R.zone_at(state, exp["zoneAt"]["t"])
+        for k in ("x", "z", "r"):
+            assert abs(z[k] - exp["zoneAt"][k]) < 0.01, f"{where}: zone.{k}={z[k]}"
     if "tagCount" in exp:
         assert state["tagCount"] == exp["tagCount"], f"{where}: tagCount={state['tagCount']}"
     if "ranking" in exp:

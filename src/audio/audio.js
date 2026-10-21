@@ -114,8 +114,8 @@ export class AudioEngine {
   _out(busNode, gain, pan) {
     const c = this.ctx;
     const g = c.createGain();
-    g.gain.value = gain;
-    if (pan) {
+    g.gain.value = Number.isFinite(gain) ? gain : 0; // a bad position must never break the frame
+    if (pan && Number.isFinite(pan)) {
       const p = c.createStereoPanner();
       p.pan.value = pan;
       g.connect(p).connect(busNode);
@@ -250,7 +250,7 @@ export class AudioEngine {
   }
 }
 
-const UI_SOUNDS = new Set(['perfectDodge', 'timeResume', 'boost', 'outplayed', 'uiHover', 'uiClick', 'uiBack', 'countdown', 'go', 'victory', 'defeat', 'levelUp', 'unlock', 'error', 'purchase', 'abilityDenied', 'abilityReady']);
+const UI_SOUNDS = new Set(['eventWarn', 'eventStart', 'powerDown', 'powerUp', 'zoneClosing', 'perfectDodge', 'timeResume', 'boost', 'outplayed', 'uiHover', 'uiClick', 'uiBack', 'countdown', 'go', 'victory', 'defeat', 'levelUp', 'unlock', 'error', 'purchase', 'abilityDenied', 'abilityReady']);
 
 const THROTTLE = {
   footstep: [0.07, 8],
@@ -259,6 +259,8 @@ const THROTTLE = {
   sprint: [0.6, 1],
   tag: [0.1, 3],
   coin: [0.05, 4],
+  fuseTick: [0.08, 2],
+  zoneWarn: [0.4, 1],
   abilityDenied: [0.25, 1],
 };
 
@@ -475,6 +477,62 @@ const SFX = {
     a._tone(out, t, 0.18, { freq: 180, freqEnd: 60, gain: 0.35 });
     a._noise(out, t, 0.25, { freq: 900, freqEnd: 2600, q: 0.6, gain: 0.18 });
     return 0.3;
+  },
+  eventWarn(a, out, t) {
+    for (let i = 0; i < 3; i++) a._tone(out, t + i * 0.22, 0.14, { type: 'square', freq: 880, gain: 0.05 });
+    return 0.8;
+  },
+  eventStart(a, out, t) {
+    a._tone(out, t, 0.7, { type: 'sawtooth', freq: 180, freqEnd: 540, gain: 0.08, attack: 0.05 });
+    a._noise(out, t, 0.6, { freq: 600, freqEnd: 3000, q: 0.6, gain: 0.15, attack: 0.1 });
+    for (const [i, f] of [523.25, 659.25, 783.99].entries()) a._tone(out, t + 0.3 + i * 0.06, 0.4, { type: 'triangle', freq: f, gain: 0.08 });
+    return 1.0;
+  },
+  powerDown(a, out, t) {
+    a._tone(out, t, 1.4, { type: 'sawtooth', freq: 220, freqEnd: 30, gain: 0.14, attack: 0.01 });
+    a._noise(out, t, 0.25, { type: 'highpass', freq: 3000, q: 0.5, gain: 0.25 });
+    a._tone(out, t + 0.05, 0.6, { freq: 60, freqEnd: 30, gain: 0.5 });
+    return 1.5;
+  },
+  powerUp(a, out, t) {
+    a._tone(out, t, 1.0, { type: 'sawtooth', freq: 40, freqEnd: 240, gain: 0.1, attack: 0.2 });
+    a._tone(out, t + 0.6, 0.3, { type: 'square', freq: 1320, gain: 0.04 });
+    return 1.1;
+  },
+  explode(a, out, t) {
+    a._tone(out, t, 1.0, { freq: 75, freqEnd: 25, gain: 1.0, attack: 0.004 });
+    a._noise(out, t, 1.2, { type: 'lowpass', freq: 4000, freqEnd: 120, q: 0.5, gain: 0.9, attack: 0.003 });
+    a._noise(out, t + 0.02, 0.4, { type: 'highpass', freq: 2500, q: 0.4, gain: 0.25 });
+    return 1.3;
+  },
+  fuseTick(a, out, t) {
+    a._tone(out, t, 0.06, { type: 'square', freq: 1760, gain: 0.05 });
+    a._noise(out, t, 0.05, { type: 'highpass', freq: 5000, q: 0.5, gain: 0.05 });
+    return 0.08;
+  },
+  zoneWarn(a, out, t) {
+    a._tone(out, t, 0.18, { type: 'sawtooth', freq: 520, freqEnd: 440, gain: 0.06 });
+    return 0.2;
+  },
+  zoneClosing(a, out, t) {
+    for (const [i, f] of [220, 277.18, 329.63].entries()) a._tone(out, t + i * 0.02, 1.4, { type: 'sawtooth', freq: f, freqEnd: f * 0.98, gain: 0.05, attack: 0.15 });
+    a._noise(out, t, 1.2, { freq: 300, freqEnd: 1200, q: 0.6, gain: 0.12, attack: 0.4 });
+    return 1.5;
+  },
+  rideStart(a, out, t) {
+    a._noise(out, t, 1.2, { freq: 400, freqEnd: 1600, q: 0.6, gain: 0.25, attack: 0.15 });
+    a._tone(out, t, 0.5, { type: 'triangle', freq: 330, freqEnd: 660, gain: 0.06 });
+    return 1.3;
+  },
+  splash(a, out, t) {
+    a._noise(out, t, 0.5, { type: 'lowpass', freq: 3500, freqEnd: 400, q: 0.5, gain: 0.45, attack: 0.005 });
+    a._noise(out, t + 0.05, 0.6, { type: 'highpass', freq: 2500, q: 0.4, gain: 0.15, attack: 0.03 });
+    a._tone(out, t, 0.15, { freq: 160, freqEnd: 60, gain: 0.3 });
+    return 0.7;
+  },
+  wade(a, out, t) {
+    a._noise(out, t, 0.18, { freq: 900, freqEnd: 500, q: 0.8, gain: 0.16, attack: 0.01 });
+    return 0.2;
   },
   coin(a, out, t) {
     // classic two-note pickup

@@ -10,6 +10,8 @@ import { formatTime } from '../core/mathUtil.js';
 import { progression } from '../progression/progression.js';
 import { AbilitySystem } from './abilities.js';
 import * as AFX from '../effects/abilityFx.js';
+import { ZoneVisual } from '../effects/zoneFx.js';
+import { MapEventDirector, EVENT_INFO, eventMods } from './mapEvents.js';
 
 export class MatchSession {
   constructor(game, opts) {
@@ -140,7 +142,52 @@ export class MatchSession {
     AFX.update(dt);
     AFX.tickTrails(this, dt);
     this.coins?.render(dt, time);
+    this.updateModeVisuals(dt);
+    if (!this.attract) {
+      const rv = this.rulesView();
+      if (!this.events) this.events = new MapEventDirector(this);
+      this.events.update(dt, rv.mapEvent || null, rv.time ?? 0);
+    }
     this.updateCamera(dt, time);
+  }
+
+  /** Movement modifiers from the active map event (low gravity, wet floors, speed surge). */
+  eventMods() {
+    const rv = this.rulesView();
+    return eventMods(rv.mapEvent || null, rv.time ?? 0);
+  }
+
+  /** Hot Potato ticking + bomb heat, Shrinking Zone wall + warnings. */
+  updateModeVisuals(dt) {
+    if (this.attract) return;
+    const rv = this.rulesView();
+    const local = this.local;
+    if (rv.zone) {
+      if (!this.zoneFx) this.zoneFx = new ZoneVisual(this.game.scene);
+      const outside = !!local && !local.out && !local.it && Math.hypot(local.renderPos.x - rv.zone.x, local.renderPos.z - rv.zone.z) > rv.zone.r;
+      this.zoneFx.update(dt, rv.zone, outside);
+      if (rv.phase === 'playing' && rv.zone.k > 0 && !this._zoneClosing) {
+        this._zoneClosing = true;
+        audio.play('zoneClosing');
+        bus.emit('hud:banner', { text: 'THE RING IS CLOSING', sub: 'Stay inside it — 4 s outside and you are out', color: '#3df5ff', ms: 2200 });
+      }
+      this._warnT = (this._warnT || 0) - dt;
+      if (outside && rv.phase === 'playing' && this._warnT <= 0) {
+        this._warnT = 0.55;
+        audio.play('zoneWarn');
+      }
+    }
+    if (rv.fuse != null && rv.phase === 'playing') {
+      const holder = [...this.players.values()].find((p) => p.it && !p.out);
+      if (holder) {
+        holder.model.potatoHeat = 1 - rv.fuse / (rv.fuseMax || 25);
+        this._tickT = (this._tickT || 0) - dt;
+        if (this._tickT <= 0) {
+          this._tickT = Math.max(0.11, Math.min(1, rv.fuse / 12));
+          audio.play('fuseTick', { pos: holder.renderPos, volume: holder.id === this.localId ? 1 : 0.75 });
+        }
+      }
+    }
   }
 
   /** Implemented by subclasses: advance the simulation by one fixed step. */
@@ -200,6 +247,16 @@ export class MatchSession {
         case 'grapple_end':
           if (p.id === this.localId) fx.dust(pos, 0.5);
           break;
+        case 'ride':
+          audio.play('rideStart', { pos, ownerId: p.id });
+          if (p.id === this.localId) bus.emit('hud:feed', { kind: 'info', text: 'Wheee! Riding the slide' });
+          break;
+        case 'ride_end':
+          audio.play('splash', { pos, ownerId: p.id, volume: 1 });
+          fx.burst({ x: pos.x, y: pos.y + 0.3, z: pos.z }, '#9fe8ff', { count: 30, speed: 5, size: 0.22, life: 0.6, up: 3, grav: 9 });
+          fx.ring(pos, '#bff3ff', 2.4, 0.45);
+          if (p.id === this.localId) this.game.cameraRig.shake(0.2);
+          break;
         default:
           break;
       }
@@ -213,7 +270,7 @@ export class MatchSession {
     const local = this.local;
     for (const p of this.players.values()) {
       const s = p.render(dt, time, p.kind === 'remote' ? 1 : alpha);
-      p.model.setIt(p.it && !p.out, this.mode === 'infection');
+      p.model.setIt(p.it && !p.out, this.mode === 'infection' ? 'infection' : this.mode === 'hotpotato' ? 'potato' : null);
       p.model.setGhost(p.out || !p.connected);
       // perfect-dodge aftermath: dizzy stars on the stunned tagger, electric boost on the dodger
       if (!p.frozen) p.stunFx = false;
@@ -224,8 +281,8 @@ export class MatchSession {
       }
       if (p.boosted && Math.random() < 0.3) fx.sparks(p.renderPos, Math.random() < 0.5 ? '#3df5ff' : '#ff3df0');
       p.model.root.visible = p.connected;
-      // hide our own name tag; show others
-      p.model.showName(p.id !== this.localId || this.attract);
+      // hide our own name tag; show others (not in a power outage: you only see glowing outlines)
+      p.model.showName((p.id !== this.localId || this.attract) && !(this.events && this.events.active === 'blackout'));
       // continuous slide audio + dust
       const sliding = s.state === MS.SLIDE;
       if (sliding && !this.wasSliding.get(p.id)) audio.startSlide(p.id, s);
@@ -308,6 +365,36 @@ export class MatchSession {
         fx.flash(ev.target === this.localId ? 'rgba(255,59,47,0.35)' : 'rgba(255,255,255,0.25)');
       }
       bus.emit('hud:feed', { kind: 'tag', a: a.name, b: b.name, mine: ev.tagger === this.localId, me: ev.target === this.localId });
+    } else if ((ev.type === 'it' || ev.type === 'infected') && this.mode === 'hotpotato') {
+      const p = this.players.get(ev.id);
+      if (!p) return;
+      fx.becomeIt(p.renderPos, '#ff8a2f');
+      if (ev.id === this.localId) {
+        audio.play('becomeIt');
+        bus.emit('hud:banner', { text: 'HOT POTATO!', sub: 'Tag someone before it blows!', color: '#ff8a2f' });
+      } else if (ev.from === this.localId) {
+        audio.play('escaped');
+        bus.emit('hud:banner', { text: 'PASSED IT!', sub: `${p.name} has the potato — keep away`, color: '#3df5ff' });
+      } else {
+        bus.emit('hud:feed', { kind: 'info', text: `${p.name} has the potato` });
+      }
+    } else if (ev.type === 'exploded') {
+      const p = this.players.get(ev.id);
+      if (!p) return;
+      const pos = p.renderPos;
+      fx.burst({ x: pos.x, y: pos.y + 1.2, z: pos.z }, '#ff8a2f', { count: 60, speed: 11, size: 0.4, life: 0.8, up: 3 });
+      fx.burst({ x: pos.x, y: pos.y + 1.2, z: pos.z }, '#ffd23d', { count: 40, speed: 7, size: 0.3, life: 0.6, up: 2 });
+      fx.burst({ x: pos.x, y: pos.y + 0.6, z: pos.z }, '#3a3a40', { count: 26, speed: 3, size: 0.9, life: 1.4, up: 1.5, grav: -0.6 });
+      fx.ring(pos, '#ff8a2f', 6, 0.5);
+      audio.play('explode', { pos });
+      const near = local && Math.hypot(local.renderPos.x - pos.x, local.renderPos.z - pos.z) < 14;
+      this.game.cameraRig.shake(ev.id === this.localId ? 0.8 : near ? 0.45 : 0.15);
+      if (ev.id === this.localId) {
+        fx.flash('rgba(255,140,40,0.55)', 300);
+        bus.emit('hud:banner', { text: 'BOOM!', sub: 'You held the potato too long — spectating', color: '#ff8a2f', big: true });
+      } else {
+        bus.emit('hud:banner', { text: 'BOOM!', sub: `${p.name} exploded`, color: '#ff8a2f' });
+      }
     } else if (ev.type === 'it' || ev.type === 'infected') {
       const p = this.players.get(ev.id);
       if (!p) return;
@@ -327,7 +414,9 @@ export class MatchSession {
       fx.eliminated(p.renderPos);
       audio.play('eliminated', { pos: p.renderPos });
       if (ev.id === this.localId) {
-        bus.emit('hud:banner', { text: 'ELIMINATED', sub: 'Spectating — click / press Jump to switch player', color: '#9aa6b8' });
+        bus.emit('hud:banner', { text: ev.reason === 'zone' ? 'CAUGHT BY THE RING' : 'ELIMINATED', sub: 'Spectating — click / press Jump to switch player', color: '#9aa6b8' });
+      } else if (ev.reason === 'zone') {
+        bus.emit('hud:feed', { kind: 'info', text: `${p.name} was caught outside the ring` });
       }
     } else if (ev.type === 'perfect_dodge') {
       const dodger = this.players.get(ev.dodger);
@@ -360,6 +449,10 @@ export class MatchSession {
         return local.it ? 'Infect every runner' : 'Survive until the clock runs out';
       case 'elimination':
         return local.out ? 'Spectating' : local.it ? 'Hunt down every runner' : 'Be the last runner standing';
+      case 'hotpotato':
+        return local.out ? 'Spectating' : local.it ? 'You have the potato — tag someone NOW!' : 'Keep away from the potato';
+      case 'zone':
+        return local.out ? 'Spectating' : local.it ? 'Hunt the runners — the ring can\'t hurt you' : 'Stay inside the ring and away from IT';
       default:
         return local.it ? 'You are IT (T to swap)' : 'Practice — press T to become IT';
     }
@@ -374,8 +467,10 @@ export class MatchSession {
     const c = local?.ctrl;
     const mv = this.cfg.movement;
     let arrow = null;
-    if (local && !local.out && rv.phase === 'playing') {
-      // directional indicator: runners see the nearest IT; IT sees the nearest runner within 30m
+    const ev = rv.mapEvent || null;
+    const evActive = ev && (rv.time ?? 0) < ev.end ? ev : null;
+    if (local && !local.out && rv.phase === 'playing' && !(evActive && evActive.kind === 'blackout' && rv.time >= evActive.start)) {
+      // directional indicator (offline during a power outage: "radar down"): runners see the nearest IT; IT sees the nearest runner within 30m
       // cloaked players don't show up on the arrow (that's what the cloak is for)
       const pool = (local.it ? runners : its).filter((p) => !this.abilities.isCloaked(p));
       let best = null;
@@ -404,6 +499,7 @@ export class MatchSession {
       localIt: !!local?.it,
       localOut: !!local?.out,
       runners: runners.length,
+      alive: [...this.players.values()].filter((p) => p.connected && !p.out).length,
       total: [...this.players.values()].filter((p) => p.connected).length,
       tags: rv.localTags ?? 0,
       stamina: c ? c.stamina / mv.staminaMax : 1,
@@ -429,6 +525,20 @@ export class MatchSession {
         max: this.cfg.abilities[id].cooldown,
       } : null)),
       dodgeAssist: !!settings.data.accessibility.dodgeAssist,
+      mapEvent: evActive ? { name: this.cfg.mapEvents.events[evActive.kind].name, icon: EVENT_INFO[evActive.kind].icon, warning: rv.time < evActive.start, left: evActive.end - rv.time } : null,
+      fuse: rv.fuse ?? null,
+      fuseMax: rv.fuseMax ?? null,
+      potatoRound: rv.potatoRound ?? null,
+      zone: rv.zone && local ? {
+        r: rv.zone.r,
+        k: rv.zone.k,
+        closingIn: Math.max(0, rv.zone.hold - (rv.time ?? 0)),
+        dist: Math.max(0, Math.hypot(local.renderPos.x - rv.zone.x, local.renderPos.z - rv.zone.z) - rv.zone.r),
+        outside: !local.out && !local.it && Math.hypot(local.renderPos.x - rv.zone.x, local.renderPos.z - rv.zone.z) > rv.zone.r,
+        storm: rv.localStorm || 0,
+        limit: rv.zone.limit,
+        angle: Math.atan2(rv.zone.x - local.renderPos.x, -(rv.zone.z - local.renderPos.z)) + this.game.cameraRig.yaw,
+      } : null,
       grappleOk: !!this.grappleTarget,
       cloaked: !!local && this.abilities.isCloaked(local),
       coinsGrabbed: this.coins?.collected || 0,
@@ -488,6 +598,8 @@ export class MatchSession {
   }
 
   dispose() {
+    this.events?.dispose();
+    this.zoneFx?.dispose();
     this.abilities.dispose();
     this.coins?.dispose();
     AFX.clear();

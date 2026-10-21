@@ -1,6 +1,8 @@
 # PRO TAG
 
-A fast 3D parkour tag game. Vault, slide, mantle, wall-jump and dodge across four arenas: Neon Rooftops, Pulse Arena (a chase-tag stadium), Sunset Dockyard and the Training Ground. Play offline against bots or online against friends through the included authoritative server.
+A fast 3D parkour tag game. Vault, slide, mantle, wall-jump and dodge across seven arenas, from neon rooftops to an overgrown abandoned mall, a giant waterpark and a toy factory. Play six modes (including Hot Potato and Shrinking Zone) offline against bots, or online against friends through the included authoritative server.
+
+**Current version: v1.02.** The first time you open a new version, a *What's new* screen lists the changes (you can reopen it from the main menu).
 
 **No installation beyond Python.** The game runs in any modern browser (Chrome, Edge or Firefox). The server is plain Python 3 with no `pip install`.
 
@@ -41,8 +43,39 @@ python server/main.py --verbose            # debug logging
 - **Infection:** tagged runners join the infected. Runners win if anyone survives the clock; the infected win if everyone is caught.
 - **Last Runner:** tagged runners are eliminated and spectate (press Jump to switch who you watch). The last runner standing wins.
 - **Practice:** no clock. Train every move on any arena, with 0 to 7 bots. Press **T** to swap who is IT.
+- **Hot Potato:** whoever is IT holds a lit bomb. Tagging someone passes it on, but the fuse keeps burning (25 s, 3 s shorter every round, down to 12 s). When it runs out, the holder explodes and is out, and the potato goes to whoever has held it least. Last one standing wins. There is no match clock.
+- **Shrinking Zone:** classic chase inside a ring that starts closing after 20 s and keeps shrinking to 7 m for the next 140 s. Tagged runners are out, and so is any runner who spends 4 s outside the ring (the time recovers slowly once you're back inside). The HUD shows when the ring closes, and an arrow and countdown when you're outside.
 
 Tagging is automatic on contact. The HUD always shows who is IT, a directional arrow to the nearest threat (or, if you are IT, the nearest runner within 30 m), your stamina, the dodge and slide cooldowns, your two ability slots and the gold coins you've grabbed. Hold **Tab** for the scoreboard.
+
+### Arenas
+
+| Arena | What's special |
+|---|---|
+| Neon Rooftops | Night-time city roofs, gaps to jump, cranes and billboards |
+| Pulse Arena | Indoor chase-tag stadium with blocks, bars and ramps |
+| Sunset Dockyard | Containers, cranes and a harbour |
+| Training Ground | Small and simple; every move in one place |
+| **Overgrown Mall** (new) | A huge abandoned three-storey mall taken over by plants: atrium with a skylight, escalators that carry you, a sky bridge, a fountain and 46 shops |
+| **Splash Kingdom** (new) | A sunny mega waterpark: spiral stair towers, pools that slow you down, and seven water slides you ride from the top (a great escape route) |
+| **Toy Factory** (new) | Conveyor belts that carry you, giant toy blocks, catwalks, robot arms and a chute into the ball pit |
+
+### Map events
+
+Every 40–60 s an arena throws an event at everyone, announced 3 s ahead in the HUD:
+
+| Event | Effect | Where |
+|---|---|---|
+| ⚡ Power Outage | Lights go out (emergency lights only), the radar arrow and name tags disappear, bots see less | Mall, Factory, Rooftops, Arena |
+| 🪙 Coin Rain | Bonus coins drop from the sky; grab them before they're gone (they don't respawn) | Everywhere |
+| 🪐 Low Gravity | Jump higher, fall slower | Rooftops, Docks, Factory, Training |
+| ⚙ Conveyor Overdrive | Every belt and escalator reverses at double speed | Factory |
+| 💦 Wet Floors | Sprinklers on: slippery floors, longer slides | Mall, Waterpark |
+| 🏃 Speed Surge | Everyone runs 15% faster | Mall, Waterpark, Arena, Docks, Training |
+| 🌊 Slide Rush | Water slides go 50% faster | Waterpark |
+| 🌫 Fog Bank | Thick fog rolls in | Rooftops, Docks |
+
+Online, the server schedules the events so everyone gets the same one at the same moment. Tuning: `config/game.json` → `mapEvents`; which events a map has: `events` in its `env` in `tools/build_maps.py`.
 
 ### Controls (defaults, all rebindable in Settings → Controls)
 
@@ -103,6 +136,10 @@ All the numbers are in `config/game.json` under `abilities` and `coins`.
 
 The server in `server/` is authoritative. It decides IT status, tags, eliminations, timers, results, XP and coins. Clients send only their movement (validated for speed, teleports, wall-clipping and freeze), plus tag, ability and coin-pickup *requests*, which the server checks (tags with lag compensation).
 
+**Lag (v1.02):** movement is sent and broadcast 30 times a second (was 20), and jumps, dodges, slides, vaults and abilities go out the instant they happen. Each snapshot row carries the time the server received that player's movement, and the client measures the jitter and draws other players only as far in the past as it needs to (typically 60–80 ms, at most 140 ms; it was a fixed 110 ms on top of the slower 20 Hz updates). The match HUD shows your ping and that delay.
+
+**Ping depends mostly on distance to the server.** Render puts a new service in Oregon (USA) unless told otherwise, which adds roughly 150 ms of round-trip ping for players in Europe. If you and your friends are in Europe, add `region: frankfurt` under the service in `render.yaml` before deploying. An existing Render service can't change region: you'd deploy a new one, which gets a new address.
+
 ### Your own website (recommended)
 
 This puts the whole game, including the multiplayer server, on the internet at a fixed address. Friends type that address into any browser (PC, laptop, even phone), and everyone meets there. You don't need to keep anything running on your PC.
@@ -159,7 +196,7 @@ Everything in Settings changes the real game and is saved on your device:
 - **Audio:** master, music and SFX volume.
 - **Controls:** mouse X/Y, controller and touch sensitivity, invert Y, always-sprint, full key rebinding.
 - **Camera:** FOV, distance, speed-FOV, shake, landing dip.
-- **Graphics:** Low/Medium/High/Ultra presets, resolution scale, frame-rate limit, FPS counter, fullscreen.
+- **Graphics:** Low/Medium/High/Ultra presets, resolution scale, dynamic resolution (lowers the resolution a little only while the graphics card can't keep up), frame-rate limit, FPS counter, fullscreen.
 - **Accessibility:** reduce flashing and shake, HUD scale, larger text, perfect-dodge assist.
 - **Network:** custom server address.
 
@@ -179,17 +216,20 @@ start-game.bat          one-click launcher (Windows)
 start-lan-server.bat    launcher for LAN play
 config/game.json        ALL gameplay tuning, shared by client and server
 src/
-  core/         config loader, event bus, settings, storage, input (kbd/mouse/gamepad/touch), math
-  movement/     collision world (AABB + ramps, grid broad-phase) and the character controller
+  core/         config loader, event bus, settings, storage, input (kbd/mouse/gamepad/touch), math,
+                version.js (VERSION + CHANGELOG for the "What's new" screen)
+  movement/     collision world (AABB + ramps, grid broad-phase, water/conveyor zones, slide paths)
+                and the character controller
   gameplay/     rules engine, Game (renderer/loop), session base, offline LocalMatch,
-                abilities (AbilitySystem) and map coins (MapCoins)
+                abilities (AbilitySystem), map coins (MapCoins), map events (mapEvents.js)
   multiplayer/  WebSocket client, OnlineMatch (prediction + interpolation)
   ai/           navigation graph + A*, bot brain
   player/       procedural character model + animation, Player entity
   camera/       third-person camera rig
-  maps/         map loader, renderer, procedural textures, decor prefabs, sky/backgrounds
+  maps/         map loader, renderer, static batching (batch.js), procedural textures,
+                decor prefabs (decor.js, decor2.js), sky/backgrounds
   effects/      pooled particles, rings, trails, lightning, perfect-dodge cinematic,
-                screen shader, ability effects
+                screen shader, ability effects, shrinking-zone wall (zoneFx.js)
   audio/        synthesised SFX engine + procedural music sequencer
   progression/  XP/levels/stats, cosmetics catalogue
   ui/           menus (incl. the Abilities shop), HUD, touch controls, ability icons,
@@ -210,20 +250,22 @@ See **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for the technical design an
 - **Tuning** (speeds, jump height, cooldowns, match length, bot difficulty, XP, coins, ability prices and cooldowns, perfect-dodge window): edit `config/game.json`. Client and server both read it.
 - **Maps:** edit `tools/build_maps.py`, then run `python tools/build_maps.py`. The builder validates spawns and geometry before writing, and places the coin spots (platform tops first, then open ground).
 - **Rules:** change `src/gameplay/rules.js` **and** `server/rules.py`, and add a case to `tests/shared/rules_cases.json`. Both test suites run it.
+- **Releasing an update:** raise `VERSION` in `src/core/version.js` and `"version"` in `config/game.json` (a test checks they match), add an entry at the top of `CHANGELOG` in `version.js`, then run `publish-website.bat`. Every player sees the *What's new* screen once.
 
 ## Tests
 
 ```bash
-python -m unittest discover -s tests -v                      # 69 server, rules, integration, social, hosting, publishing, perfect-dodge, ability and coin tests
-# with the server running, open http://localhost:8080/tests/browser/   (90 browser tests)
+python -m unittest discover -s tests -v                      # 79 server, rules, integration, social, hosting, publishing, perfect-dodge, ability, coin, new-mode, map-event and map-feature tests
+# with the server running, open http://localhost:8080/tests/browser/   (128 browser tests)
 ```
 
-Latest results: **69/69 Python tests** and **90/90 browser tests** passing. Details, the manual verification checklist, and what could not be tested are in **[docs/TESTING.md](docs/TESTING.md)**.
+Latest results: **79/79 Python tests** and **128/128 browser tests** passing. Details, the manual verification checklist, and what could not be tested are in **[docs/TESTING.md](docs/TESTING.md)**.
 
 ## Requirements and performance
 
 - Windows 10/11 (also works on macOS/Linux), Python 3.10+, and a WebGL 2 browser (current Chrome, Edge or Firefox).
-- Measured on the development laptop's **Intel UHD integrated GPU** at 1024×768, in a full 10-player match on the busiest map (Neon Rooftops). Figures are frame cost converted to FPS (CPU simulation + GPU render, forced to finish):
+- **v1.02 optimisations:** each character is now one skinned mesh (3 draw calls instead of about 26), static map props are merged by material, and coins are instanced. A full 10-player match issues roughly 70–125 draw calls per frame, about 60–70% fewer than before. Shaders compile while the arena loads (the Mall took about 5 s to load, now about 1 s), and dynamic resolution steps in only when the graphics card is the bottleneck.
+- The table below was measured for **v1.0**, before those optimisations, on the development laptop's **Intel UHD integrated GPU** at 1024×768, in a full 10-player match on Neon Rooftops. Figures are frame cost converted to FPS (CPU simulation + GPU render, forced to finish). New figures for v1.02 couldn't be measured reliably here (the test browser ran in the background):
 
   | Preset | Frame cost | ≈ FPS |
   |---|---|---|
@@ -242,10 +284,11 @@ Also listed in [docs/TESTING.md](docs/TESTING.md#limitations).
 - **Bots are offline only.** Online rooms are human players (minimum 2).
 - **Progression is stored locally** in the browser, including coins and which abilities you own. Online XP and coins are computed by the server, but local storage can still be edited by the player, so this isn't tamper-proof persistence. Online, the server can't know what you *bought*; it enforces the loadout shape (2 slots, no duplicates), the cooldowns, and every ability's effect.
 - **Anti-cheat is practical, not perfect:** the server validates speed, teleports, solids and freeze, and checks tags with lag compensation, but it doesn't re-simulate full movement physics.
-- **Characters are procedural primitives**, animated procedurally; there are no skinned or motion-captured models.
+- **Characters are built from procedural primitives** (merged into one skinned mesh) and animated procedurally; there are no authored or motion-captured models.
 - **Not tested on real hardware here:** gamepads, physical touch devices, and real internet latency. Each is implemented to the standard browser APIs; see TESTING.md.
 - **There's no Exit button.** It isn't applicable in a browser: close the tab, or stop the server with Ctrl+C.
-- **No moving platforms.** Jump pads are the only dynamic traversal.
+- **No moving platforms.** Jump pads, conveyor belts, escalators and water slides are the dynamic traversal.
+- **Bots don't use conveyors on purpose.** Belts simply carry them, which can push them off course for a moment.
 
 ## Roadmap
 

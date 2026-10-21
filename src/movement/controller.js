@@ -8,8 +8,8 @@
 
 import { clamp, moveTowards2, smoothstep, wrapAngle } from '../core/mathUtil.js';
 
-export const MS = Object.freeze({ GROUND: 0, AIR: 1, SLIDE: 2, VAULT: 3, MANTLE: 4, DODGE: 5, GRAPPLE: 6 });
-export const MS_NAMES = ['ground', 'air', 'slide', 'vault', 'mantle', 'dodge', 'grapple'];
+export const MS = Object.freeze({ GROUND: 0, AIR: 1, SLIDE: 2, VAULT: 3, MANTLE: 4, DODGE: 5, GRAPPLE: 6, RIDE: 7 });
+export const MS_NAMES = ['ground', 'air', 'slide', 'vault', 'mantle', 'dodge', 'grapple', 'ride'];
 
 const EMPTY_INPUT = Object.freeze({ mx: 0, mz: 0, jumpPressed: false, jumpHeld: false, sprint: false, slidePressed: false, dodgePressed: false, vaultPressed: false });
 
@@ -26,7 +26,12 @@ export class CharacterController {
     this.stamina = movementCfg.staminaMax;
     this.sprinting = false;
     this.speedMultiplier = 1; // IT bonus etc. (set by gameplay)
+    this.gravityScale = 1; // map events (low gravity)
+    this.traction = 1; // map events (wet floors): < 1 = slippery
     this.frozen = false; // new-IT freeze: cannot move
+    this.zone = null; // water / conveyor zone under the feet this step
+    this.ride = null; // water slide in progress
+    this.rideCooldown = 0;
     this.events = [];
 
     this.coyote = 0;
@@ -64,6 +69,7 @@ export class CharacterController {
     this.slideTimer = this.dodgeTimer = 0;
     this.dodgeAge = 1e9;
     this.grapple = null;
+    this.ride = null;
     this.airTime = 0;
   }
 
@@ -85,6 +91,7 @@ export class CharacterController {
     this.dodgeAge += dt;
     this.wallJumpCooldown = Math.max(0, this.wallJumpCooldown - dt);
     this.padCooldown = Math.max(0, this.padCooldown - dt);
+    this.rideCooldown = Math.max(0, this.rideCooldown - dt);
     this.wallTimer = Math.max(0, this.wallTimer - dt);
     this.coyote = this.grounded ? c.coyoteTime : Math.max(0, this.coyote - dt);
     this.jumpBuffer = inp.jumpPressed ? c.jumpBuffer : Math.max(0, this.jumpBuffer - dt);
@@ -97,6 +104,13 @@ export class CharacterController {
       this._stepGrapple(dt, inp);
       return;
     }
+    if (this.ride) {
+      this._stepRide(dt);
+      return;
+    }
+    const zone = this.world.zones.length ? this.world.zoneAt(this.pos.x, this.pos.y + 0.05, this.pos.z) : null;
+    this.zone = zone;
+    const wade = zone && (zone.k === 'water' || zone.k === 'pit') ? zone.s : 1; // pools, ball pits
 
     let wishX = inp.mx || 0;
     let wishZ = inp.mz || 0;
@@ -180,8 +194,8 @@ export class CharacterController {
       }
     } else if (this.state === MS.SLIDE) {
       this.slideTimer -= dt;
-      // friction + limited steering
-      let sp = Math.max(0, hs - c.slideFriction * dt);
+      // friction + limited steering (water drags, wet floors barely do)
+      let sp = Math.max(0, hs - (c.slideFriction * (wade < 1 ? 2.2 : 1) * (this.traction < 1 ? 0.35 : 1)) * dt);
       let dirX = hs > 1e-3 ? this.vel.x / hs : -Math.sin(this.yaw);
       let dirZ = hs > 1e-3 ? this.vel.z / hs : -Math.cos(this.yaw);
       if (wishLen > 0.2) {
@@ -202,11 +216,11 @@ export class CharacterController {
     } else {
       let maxSpeed = wishMag < 0.55 ? c.walkSpeed + (c.runSpeed - c.walkSpeed) * clamp((wishMag - 0.2) / 0.35, 0, 1) : c.runSpeed;
       if (this.sprinting) maxSpeed = c.sprintSpeed;
-      maxSpeed *= this.speedMultiplier;
+      maxSpeed *= this.speedMultiplier * wade;
       const tx = wishDirX * maxSpeed * (wishMag > 0 ? 1 : 0);
       const tz = wishDirZ * maxSpeed * (wishMag > 0 ? 1 : 0);
       if (this.grounded) {
-        let accel = wishMag > 0.05 ? c.groundAccel : c.groundDecel;
+        let accel = (wishMag > 0.05 ? c.groundAccel : c.groundDecel) * this.traction;
         if (wishMag > 0.05 && this.vel.x * wishDirX + this.vel.z * wishDirZ < 0) accel *= c.turnAccelBoost;
         [this.vel.x, this.vel.z] = moveTowards2(this.vel.x, this.vel.z, tx, tz, accel * dt);
       } else if (wishMag > 0.05) {
@@ -260,10 +274,28 @@ export class CharacterController {
       }
     }
 
+    // ---- rides: stepping onto a water slide's entry starts the ride
+    if (this.rideCooldown <= 0) {
+      for (const r of this.world.rides) {
+        const e = r.pts[0];
+        if (Math.abs(this.pos.y - e.y) < 1.2 && (this.pos.x - e.x) ** 2 + (this.pos.z - e.z) ** 2 < r.r * r.r) {
+          this._startRide(r);
+          return;
+        }
+      }
+    }
+
     // ---- gravity
     if (!this.grounded || this.vel.y > 0) {
-      const g = this.state === MS.DODGE ? c.gravity * 0.35 : c.gravity;
+      const g = (this.state === MS.DODGE ? c.gravity * 0.35 : c.gravity) * this.gravityScale;
       this.vel.y = Math.max(-c.maxFallSpeed, this.vel.y - g * dt);
+    }
+
+    // ---- conveyor belts / escalators carry whoever stands on them
+    if (zone && zone.k === 'conveyor' && this.grounded) {
+      const k = this.world.conveyorScale;
+      this.pos.x += zone.vx * k * dt;
+      this.pos.z += zone.vz * k * dt;
     }
 
     this._integrate(dt);
@@ -285,7 +317,7 @@ export class CharacterController {
    * that is not free, so it can never pass through a wall. Returns { from, to } or null.
    */
   blink(dirX, dirZ, range) {
-    if (this.script || this.frozen) return null;
+    if (this.script || this.frozen || this.ride) return null;
     const c = this.cfg;
     const w = this.world;
     const len = Math.hypot(dirX, dirZ);
@@ -322,7 +354,7 @@ export class CharacterController {
 
   /** Grapple hook: fly toward an anchor point (validated by the caller with a ray cast). */
   startGrapple(anchor, speed, maxTime) {
-    if (this.script || this.frozen) return false;
+    if (this.script || this.frozen || this.ride) return false;
     if (this.state === MS.SLIDE) this._endSlide();
     this.grapple = { x: anchor.x, y: anchor.y, z: anchor.z, speed, t: 0, maxTime, lastD: Infinity, stuck: 0 };
     this.state = MS.GRAPPLE;
@@ -371,9 +403,43 @@ export class CharacterController {
     this.emit('grapple_end');
   }
 
+  // ------------------------------------------------------------------ rides (water slides)
+  _startRide(r) {
+    if (this.state === MS.SLIDE) this._endSlide();
+    this.grapple = null;
+    this.ride = { r, s: 0, v: Math.max(6, this.horizontalSpeed * 0.7), p: {} };
+    this.state = MS.RIDE;
+    this.grounded = false;
+    this.height = this.cfg.slideHeight;
+    this.emit('ride', { id: r.id });
+  }
+
+  _stepRide(dt) {
+    const rd = this.ride;
+    const r = rd.r;
+    const p = r.at(rd.s, rd.p);
+    // gravity pulls you down the slope; a little drag keeps the top speed sane
+    rd.v = clamp(rd.v + (-p.ty * this.cfg.gravity * this.gravityScale * 0.85 - 1.5) * dt, 5, r.vmax);
+    const v = rd.v * (this.world.rideScale || 1); // Slide Rush event: everything on the slides runs 50% faster
+    rd.s += v * dt;
+    const q = r.at(rd.s, rd.p);
+    this.pos.x = q.x; this.pos.y = q.y; this.pos.z = q.z;
+    this.vel.x = q.tx * v; this.vel.y = q.ty * v; this.vel.z = q.tz * v;
+    if (Math.abs(q.tx) + Math.abs(q.tz) > 0.05) this.yaw = Math.atan2(-q.tx, -q.tz);
+    if (rd.s >= r.len) {
+      // shot out of the end of the tube
+      this.ride = null;
+      this.rideCooldown = 1.5;
+      this.height = this.cfg.height;
+      this.vel.y = Math.max(this.vel.y, 2.5);
+      this.state = MS.AIR;
+      this.emit('ride_end', { id: r.id, speed: rd.v });
+    }
+  }
+
   /** Rocket jump: big upward launch with a little forward push. Works in the air too. */
   rocket(vy, forward) {
-    if (this.script || this.frozen) return false;
+    if (this.script || this.frozen || this.ride) return false;
     if (this.grapple) this.endGrapple();
     if (this.state === MS.SLIDE) this._endSlide();
     const fx = -Math.sin(this.yaw), fz = -Math.cos(this.yaw);
@@ -389,7 +455,7 @@ export class CharacterController {
 
   /** External push (Shockwave). Ignored during scripted vault/mantle motion. */
   applyImpulse(vx, vy, vz) {
-    if (this.script) return;
+    if (this.script || this.ride) return;
     if (this.grapple) this.endGrapple();
     if (this.state === MS.SLIDE) this._endSlide();
     this.vel.x += vx;
@@ -627,7 +693,8 @@ export class CharacterController {
 
   /** Normalised progress of scripted motion (for animation). */
   get scriptProgress() {
-    return this.script ? Math.min(1, this.script.t) : 0;
+    if (this.script) return Math.min(1, this.script.t);
+    return this.ride ? this.ride.s / this.ride.r.len : 0;
   }
 }
 

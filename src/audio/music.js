@@ -34,6 +34,22 @@ const TRACKS = {
     kick: 'x.......x.......', snare: '....x.......x...', hat: 'x.x.x.x.x.x.x.x.',
     bass: '0...0...0.4.0...', arp: '0.2.4.7.4.2.0.4.', pad: true, lead: null, swing: 0.08,
   },
+  // v1.02: an empty mall's dreamy lounge music, a sunny waterpark bop, a clanky factory groove
+  mall: {
+    bpm: 92, root: 46, scale: DORIAN, prog: [0, 3, 5, 4],
+    kick: 'x.......x..x....', snare: '....x.......x...', hat: '..x...x...x...xx',
+    bass: '0.....0.2...4...', arp: '4.2.0.2.4.6.4.2.', pad: true, lead: '6.......4...2...', swing: 0.14,
+  },
+  waterpark: {
+    bpm: 122, root: 50, scale: MAJOR, prog: [0, 3, 4, 3],
+    kick: 'x...x...x...x...', snare: '....x.......x...', hat: '..x...x...x.x.x.',
+    bass: '0.0...0.2.0...4.', arp: '0.2.4.5.4.2.4.7.', pad: true, lead: '4...5...7...4...', swing: 0.06,
+  },
+  factory: {
+    bpm: 118, root: 42, scale: MINOR, prog: [0, 0, 5, 4],
+    kick: 'x..x..x...x..x..', snare: '....x.......x.x.', hat: 'xxx.xxx.xxx.xxx.',
+    bass: '0.0.3.0.0.0.5.4.', arp: '0.4.0.7.0.4.0.9.', pad: false, lead: '7...7...6...4...', swing: 0.0,
+  },
 };
 
 export class MusicPlayer {

@@ -154,7 +154,8 @@ export class NetClient {
   _startPing() {
     clearInterval(this.pingTimer);
     this.pingTimer = setInterval(() => this._send({ t: 'ping', c: this.now() }), 1000);
-    this._send({ t: 'ping', c: this.now() });
+    // a quick burst first so the server clock estimate (used to place remote players) settles fast
+    for (let i = 0; i < 5; i++) setTimeout(() => this._send({ t: 'ping', c: this.now() }), i * 120);
   }
 
   _handle(msg) {
@@ -164,8 +165,10 @@ export class NetClient {
         const rtt = now - msg.c;
         this.rtt = this.rtt ? this.rtt * 0.8 + rtt * 0.2 : rtt;
         const offset = msg.s + rtt / 2 - now;
-        // trust the lowest-latency samples most
-        this.clockOffset = this.clockOffset == null ? offset : this.clockOffset * 0.9 + offset * 0.1;
+        // trust the lowest-latency samples most: a slow round trip says little about the offset
+        this.minRtt = Math.min(this.minRtt ?? Infinity, rtt);
+        const w = rtt <= this.minRtt * 1.25 ? 0.25 : 0.04;
+        this.clockOffset = this.clockOffset == null ? offset : this.clockOffset * (1 - w) + offset * w;
         break;
       }
       case 'room':

@@ -144,9 +144,11 @@ export function cloakVisual(p, cloaked, isLocal, time) {
 export function makeHologram(model) {
   model.setCloak(0.8);
   model.root.traverse((o) => {
-    if (o.isMesh && o.material?.emissive) {
-      o.material.emissive.set('#3df5ff');
-      o.material.emissiveIntensity = 0.25;
+    if (!o.isMesh) return;
+    for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
+      if (!m.emissive) continue;
+      m.emissive.set('#3df5ff');
+      m.emissiveIntensity = 0.25;
     }
   });
   model.blob.visible = true;

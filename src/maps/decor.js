@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { textTexture, texture } from './textures.js';
 import { mulberry32 } from '../core/mathUtil.js';
+import { PREFABS2, POWER } from './decor2.js';
 
 const DEG = Math.PI / 180;
 
@@ -30,14 +31,25 @@ export function buildDecor(map, quality, animated) {
   root.name = 'decor';
   const lightBudget = { n: quality.pointLights ?? 0 };
   const ctx = { map, quality, animated, lightBudget, rng: mulberry32(1234) };
+  // every map starts with the power on
+  POWER.lights.color.set('#fff6dc');
+  POWER.emergency.color.set('#2a0d0d');
+  POWER.window.color.set('#7fd6ff');
   for (const d of map.decor || []) {
-    const fn = PREFABS[d.t];
+    const fn = PREFABS[d.t] || PREFABS2[d.t];
     if (!fn) {
       console.warn(`[decor] unknown prefab "${d.t}"`);
       continue;
     }
+    const before = animated.length;
     const obj = fn(d, ctx);
-    if (obj) root.add(obj);
+    if (!obj) continue;
+    // prefabs that animate keep their own meshes (unless they flagged only the moving parts
+    // themselves, or declared batchSafe: the animation never moves a mesh); the rest is merged
+    let marked = false;
+    obj.traverse((o) => { if (o.userData.dynamic) marked = true; });
+    if ((animated.length !== before && !marked && !obj.userData.batchSafe) || d.dynamic) obj.userData.dynamic = true;
+    root.add(obj);
   }
   return root;
 }
@@ -289,6 +301,7 @@ const PREFABS = {
     cable.position.y = d.h / 2 + 1.5;
     g.add(cable);
     let last = '';
+    g.userData.batchSafe = true; // only the canvas texture changes
     ctx.animated.push((dt, t, info) => {
       const time = info?.clock ?? 'PULSE';
       const sub = info?.itName ? `IT: ${info.itName}` : 'CHASE TAG';
@@ -371,6 +384,7 @@ const PREFABS = {
       );
     };
     ctx.animated.push((dt, t) => { uniforms.uTime.value = t; });
+    people.userData.dynamic = true;
     g.add(people);
     const wall = mesh(new THREE.BoxGeometry(70, 16, 1), std('#0f1420'), { cast: false });
     for (let side = 0; side < 4; side++) {
@@ -502,9 +516,14 @@ const PREFABS = {
     post.position.y = 1.1;
     g.add(post);
     const mat = new THREE.MeshStandardMaterial({ map: textTexture(d.text, { color: '#ffffff', bg: '#1f6feb', sub: d.sub, subColor: '#dfeaff', font: '900 110px "Segoe UI", sans-serif' }), roughness: 0.6 });
-    const panel = mesh(new THREE.BoxGeometry(3.2, 0.8, 0.06), [std('#1f6feb'), std('#1f6feb'), std('#1f6feb'), std('#1f6feb'), mat, mat], { cast: true });
+    const panel = mesh(new THREE.BoxGeometry(3.2, 0.8, 0.06), std('#1f6feb'), { cast: true });
     panel.position.y = 2.4;
     g.add(panel);
+    const front = new THREE.PlaneGeometry(3.2, 0.8).translate(0, 0, 0.031);
+    const back = new THREE.PlaneGeometry(3.2, 0.8).rotateY(Math.PI).translate(0, 0, -0.031);
+    const faces = mesh(mergeTwo(front, back), mat, { cast: false });
+    faces.position.y = 2.4;
+    g.add(faces);
     return g;
   },
 
@@ -532,6 +551,21 @@ const PREFABS = {
     return g;
   },
 };
+
+/** Two indexed geometries with the same attributes as one. */
+function mergeTwo(a, b) {
+  const g = new THREE.BufferGeometry();
+  for (const name of ['position', 'normal', 'uv']) {
+    const A = a.attributes[name].array, B = b.attributes[name].array;
+    const arr = new Float32Array(A.length + B.length);
+    arr.set(A);
+    arr.set(B, A.length);
+    g.setAttribute(name, new THREE.BufferAttribute(arr, a.attributes[name].itemSize));
+  }
+  const n = a.attributes.position.count;
+  g.setIndex([...a.index.array, ...Array.from(b.index.array, (i) => i + n)]);
+  return g;
+}
 
 let _pool = null;
 function poolTexture() {
@@ -591,4 +625,4 @@ function waterNormalTexture() {
   return _waterN;
 }
 
-export { puffTexture };
+export { puffTexture, waterNormalTexture };

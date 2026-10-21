@@ -44,6 +44,8 @@ export class Game {
     this.screenFx = createScreenFx();
     this.perfectFx = new PerfectDodgeDirector(this);
     this.fxComposer = null; // lightweight composer used for screen effects on presets without bloom
+    this.dynScale = 1; // dynamic resolution factor (see _dynamicResolution)
+    this._dyn = { ft: 0, cpu: 0, t: 0, hold: 0 };
     this._setupComposer();
     window.addEventListener('resize', () => this.resize());
     bus.on('settings:changed', ({ path }) => {
@@ -131,7 +133,7 @@ export class Game {
   resize() {
     const w = window.innerWidth, h = window.innerHeight;
     const scale = settings.data.graphics.renderScale;
-    const pr = Math.min((window.devicePixelRatio || 1) * scale, this.quality.maxPixelRatio * Math.max(1, scale));
+    const pr = Math.min((window.devicePixelRatio || 1) * scale, this.quality.maxPixelRatio * Math.max(1, scale)) * this.dynScale;
     this.renderer.setPixelRatio(Math.max(0.4, pr));
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
@@ -146,10 +148,18 @@ export class Game {
   /** Load (or reuse) a map. Returns the map record. */
   async loadMap(id) {
     if (this.map?.id === id) return this.map;
+    const token = (this._mapToken = (this._mapToken || 0) + 1);
     // the running session (e.g. the menu background match) belongs to the old map: stop it first
     this.setSession(null);
     this.unloadMap();
     const data = await loadMap(id);
+    if (token !== this._mapToken) {
+      // a newer load (e.g. Play pressed while the menu's background arena was loading) won:
+      // building this one too would leave a second, invisible-to-the-code map in the scene
+      const err = new Error(`map load of ${id} superseded`);
+      err.superseded = true;
+      throw err;
+    }
     const world = new CollisionWorld(data);
     const visuals = buildMapVisuals(data, this.scene, this.quality);
     this.map = { id, data, world, visuals, nav: null };
@@ -182,8 +192,9 @@ export class Game {
    * loading (screen-effect composer, afterimages, glow/rope materials, see-through cloaked
    * characters). Without this the first perfect dodge or cloak stalls a frame for ~0.5-0.9 s.
    */
-  prewarmEffects() {
+  async prewarmEffects() {
     const t0 = performance.now();
+    this._prewarming = true; // the loop must not render meanwhile: a draw would block on unready shaders
     try {
       // everything is DRAWN once in front of the camera (compiling alone is not enough: drivers
       // may finish a shader lazily on its first real draw, which is exactly the stall we avoid)
@@ -197,6 +208,10 @@ export class Game {
       const extras = AFX.prewarmObjects();
       extras.position.copy(ahead);
       this.scene.add(extras);
+      // compile every program in parallel on the driver's threads (KHR_parallel_shader_compile)
+      // instead of one by one on the main thread: much shorter loads on big maps, and the
+      // loading screen keeps animating
+      await this.renderer.compileAsync(this.scene, this.camera);
       this.perfectFx.prewarm();
       this.scene.remove(extras);
       AFX.disposeObjects(extras);
@@ -204,11 +219,12 @@ export class Game {
         model.setCloak(null);
         model.root.position.copy(saved);
       }
-      this.renderer.compile(this.scene, this.camera);
-      this._render(0); // wait for the links now, behind the loading screen, not on frame 1
+      await this.renderer.compileAsync(this.scene, this.camera);
+      this._render(0); // finish any lazy work now, behind the loading screen, not on frame 1
     } catch (err) {
       console.warn('[fx] prewarm failed', err);
     }
+    this._prewarming = false;
     console.info(`[fx] effects prewarmed in ${(performance.now() - t0).toFixed(0)} ms`);
   }
 
@@ -237,6 +253,7 @@ export class Game {
       this._fpsN = 0;
     }
 
+    const cpu0 = performance.now();
     try {
       if (this.session && this.map) this.session.frame(dt, this.time);
       else this.input.pollMenuNav(dt);
@@ -249,7 +266,41 @@ export class Game {
       console.error('[game] frame error', err);
       bus.emit('game:error', err);
     }
+    if (this._prewarming) return;
     this._render(dt);
+    this._dynamicResolution(dt, performance.now() - cpu0);
+  }
+
+  /**
+   * Dynamic resolution: when frames are being dropped and the CPU side of the frame is cheap
+   * (so the GPU is the bottleneck), render fewer pixels; give them back once there is headroom.
+   * Never touches CPU-bound frames, where fewer pixels would only blur the picture for nothing.
+   */
+  _dynamicResolution(dt, cpuMs) {
+    const d = this._dyn;
+    if (!settings.data.graphics.dynamicRes || !this.session || this.session.attract || document.hidden || dt > 0.25) {
+      if (this.dynScale !== 1 && !settings.data.graphics.dynamicRes) {
+        this.dynScale = 1;
+        this.resize();
+      }
+      return;
+    }
+    d.ft = d.ft ? d.ft * 0.92 + dt * 0.08 : dt;
+    d.cpu = d.cpu ? d.cpu * 0.92 + cpuMs * 0.08 : cpuMs;
+    d.t += dt;
+    if (d.t < 1) return; // decide once a second
+    d.t = 0;
+    const target = 1 / (settings.data.graphics.fpsLimit || 60);
+    const gpuBound = d.cpu < target * 1000 * 0.6;
+    if (d.ft > target * 1.2 && gpuBound && this.dynScale > 0.6) {
+      this.dynScale = Math.max(0.6, +(this.dynScale - 0.1).toFixed(2));
+      d.hold = 5;
+      this.resize();
+    } else if (d.ft < target * 1.06 && this.dynScale < 1 && --d.hold <= 0) {
+      this.dynScale = Math.min(1, +(this.dynScale + 0.05).toFixed(2));
+      d.hold = 3;
+      this.resize();
+    }
   }
 
   _render(dt) {

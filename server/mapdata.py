@@ -51,6 +51,60 @@ class Collider:
         return self.lo + (self.y1 - self.lo) * t
 
 
+class _Zone:
+    __slots__ = ("k", "s", "vx", "vz", "cx", "cz", "r2", "x0", "y0", "z0", "x1", "y1", "z1")
+
+    def __init__(self, z):
+        self.k = z.get("k")
+        self.s = z.get("s", 1.0)
+        v = z.get("v") or (0.0, 0.0)
+        self.vx, self.vz = float(v[0]), float(v[1])
+        if z.get("c"):
+            self.cx, self.cz = z["c"]
+            self.r2 = z["r"] * z["r"]
+            self.y0, self.y1 = z["y"]
+            self.x0 = None
+        else:
+            self.cx = None
+            self.x0, self.y0, self.z0, self.x1, self.y1, self.z1 = z["b"]
+
+    def contains(self, x, y, z):
+        if y < self.y0 - 0.3 or y > self.y1 + 0.3:
+            return False
+        if self.cx is not None:
+            return (x - self.cx) ** 2 + (z - self.cz) ** 2 <= self.r2
+        return self.x0 <= x <= self.x1 and self.z0 <= z <= self.z1
+
+
+class _Ride:
+    """A water slide path (dense polyline) with a padded bounding box for quick rejects."""
+
+    def __init__(self, r):
+        self.pts = [tuple(p) for p in r["pts"]]
+        self.vmax = float(r.get("vmax", 16))
+        xs, ys, zs = zip(*self.pts)
+        pad = 4.0
+        self.bb = (min(xs) - pad, min(ys) - pad, min(zs) - pad, max(xs) + pad, max(ys) + pad, max(zs) + pad)
+
+    def near(self, x, y, z, slack):
+        b = self.bb
+        if not (b[0] <= x <= b[3] and b[1] <= y <= b[4] and b[2] <= z <= b[5]):
+            return False
+        s2 = slack * slack
+        pts = self.pts
+        for i in range(len(pts) - 1):
+            ax, ay, az = pts[i]
+            bx, by, bz = pts[i + 1]
+            dx, dy, dz = bx - ax, by - ay, bz - az
+            ll = dx * dx + dy * dy + dz * dz or 1e-9
+            t = ((x - ax) * dx + (y - ay) * dy + (z - az) * dz) / ll
+            t = 0.0 if t < 0 else 1.0 if t > 1 else t
+            px, py, pz = ax + dx * t - x, ay + dy * t - y, az + dz * t - z
+            if px * px + py * py + pz * pz <= s2:
+                return True
+        return False
+
+
 def _circle_overlaps(x, z, r, c):
     cx = c.x0 if x < c.x0 else c.x1 if x > c.x1 else x
     cz = c.z0 if z < c.z0 else c.z1 if z > c.z1 else z
@@ -76,6 +130,11 @@ class MapData:
         self.spawns = data["spawns"]
         self.pads = [Pad(p) for p in data.get("pads") or ()]
         self.coin_spots = [list(s) for s in data.get("coinSpots") or ()]
+        # water / conveyor zones and water-slide rides (movement validation allowances)
+        self.zones = [_Zone(z) for z in data.get("zones") or ()]
+        self.conveyor_max = max((math.hypot(z.vx, z.vz) for z in self.zones if z.k == "conveyor"), default=0.0)
+        self.rides = [_Ride(r) for r in data.get("rides") or ()]
+        self.ride_vmax = max((r.vmax for r in self.rides), default=0.0)
         self.colliders = [Collider(s) for s in data["solids"]]
         self.grid: dict[tuple[int, int], list[Collider]] = {}
         self.big: list[Collider] = []
@@ -88,6 +147,16 @@ class MapData:
             for gx in range(cx0, cx1 + 1):
                 for gz in range(cz0, cz1 + 1):
                     self.grid.setdefault((gx, gz), []).append(c)
+
+    def zone_at(self, x, y, z):
+        for zn in self.zones:
+            if zn.contains(x, y, z):
+                return zn
+        return None
+
+    def near_ride(self, x, y, z, slack=3.0):
+        """True if the point is within `slack` metres of any water-slide path."""
+        return any(r.near(x, y, z, slack) for r in self.rides)
 
     def query(self, x0, z0, x1, z1):
         seen = set()

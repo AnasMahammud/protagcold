@@ -48,12 +48,23 @@ function blobTexture() {
 
 class Joint {
   constructor(name, parent, x, y, z) {
-    this.obj = new THREE.Group();
+    // a Bone, so the whole body can be ONE skinned mesh (see _buildBody)
+    this.obj = new THREE.Bone();
     this.obj.name = name;
     this.obj.position.set(x, y, z);
+    this.rest = new THREE.Vector3(x, y, z);
+    this.parentJoint = parent.isBone ? parent.userData.joint : null;
+    this.obj.userData.joint = this;
     parent.add(this.obj);
     this.cur = new THREE.Vector3();
     this.tgt = new THREE.Vector3();
+  }
+
+  /** Rest-pose position relative to the character's body (all joints unrotated). */
+  restWorld(out = new THREE.Vector3()) {
+    out.copy(this.rest);
+    for (let j = this.parentJoint; j; j = j.parentJoint) out.add(j.rest);
+    return out;
   }
 
   set(x, y = 0, z = 0) {
@@ -68,6 +79,12 @@ class Joint {
   }
 }
 
+// Material groups of the merged body: 0 = suit (standard, vertex colours), 1 = visor (shiny),
+// 2 = glowing accents (unlit). One draw call each instead of one per body part.
+const GROUP = { primary: 0, secondary: 0, dark: 0, sole: 0, hat: 0, visor: 1, accent: 2, hatGlow: 2 };
+const FIXED = { dark: '#15171c', sole: '#f2f2f2', visor: '#0b0d12' };
+const stripeGeo = new THREE.BoxGeometry(0.42, 0.035, 0.02);
+
 export class CharacterModel {
   constructor(cosmetics) {
     this.root = new THREE.Group();
@@ -76,22 +93,11 @@ export class CharacterModel {
     this.root.add(this.body);
 
     this.mats = {
-      primary: new THREE.MeshStandardMaterial({ color: '#ff5a3d', roughness: 0.55, metalness: 0.05 }),
-      secondary: new THREE.MeshStandardMaterial({ color: '#20242e', roughness: 0.65, metalness: 0.1 }),
-      dark: new THREE.MeshStandardMaterial({ color: '#15171c', roughness: 0.5, metalness: 0.2 }),
-      visor: new THREE.MeshStandardMaterial({ color: '#0b0d12', roughness: 0.12, metalness: 0.85 }),
-      accent: new THREE.MeshBasicMaterial({ color: '#3df5ff' }),
-      sole: new THREE.MeshStandardMaterial({ color: '#f2f2f2', roughness: 0.7 }),
+      body: new THREE.MeshStandardMaterial({ roughness: 0.58, metalness: 0.08, vertexColors: true }),
+      visor: new THREE.MeshStandardMaterial({ roughness: 0.12, metalness: 0.85, vertexColors: true }),
+      glow: new THREE.MeshBasicMaterial({ vertexColors: true }),
     };
-    this.mats.accent.toneMapped = false;
-
-    const add = (parent, geo, mat, x = 0, y = 0, z = 0, cast = true) => {
-      const m = new THREE.Mesh(geo, mat);
-      m.position.set(x, y, z);
-      m.castShadow = cast;
-      parent.add(m);
-      return m;
-    };
+    this.mats.glow.toneMapped = false;
 
     // --- skeleton
     this.hips = new Joint('hips', this.body, 0, 0.94, 0);
@@ -109,34 +115,11 @@ export class CharacterModel {
     this.ankleL = new Joint('ankleL', this.kneeL.obj, 0, -0.46, 0);
     this.ankleR = new Joint('ankleR', this.kneeR.obj, 0, -0.46, 0);
     this.joints = [this.hips, this.spine, this.neck, this.head, this.shoulderL, this.shoulderR, this.elbowL, this.elbowR, this.hipL, this.hipR, this.kneeL, this.kneeR, this.ankleL, this.ankleR];
-
-    // --- meshes
-    add(this.hips.obj, sharedGeo.pelvis, this.mats.secondary, 0, 0, 0).rotation.z = Math.PI / 2;
-    add(this.spine.obj, sharedGeo.torso, this.mats.primary, 0, 0.24, 0);
-    this.chest = add(this.spine.obj, sharedGeo.chestPlate, this.mats.secondary, 0, 0.3, 0.18);
-    const stripe = add(this.spine.obj, new THREE.BoxGeometry(0.42, 0.035, 0.02), this.mats.accent, 0, 0.3, 0.205, false);
-    stripe.scale.x = 0.7;
-    this.headMesh = add(this.head.obj, sharedGeo.head, this.mats.primary, 0, 0.02, 0);
-    const visor = add(this.head.obj, sharedGeo.visor, this.mats.visor, 0, 0.02, 0, false);
-    visor.rotation.y = Math.PI / 2; // model faces +Z internally
-    const vline = add(this.head.obj, sharedGeo.visorLine, this.mats.accent, 0, -0.005, 0, false);
-    vline.rotation.x = Math.PI / 2;
-    vline.rotation.z = Math.PI / 2 - 1.1;
-    for (const [sh, el] of [[this.shoulderL, this.elbowL], [this.shoulderR, this.elbowR]]) {
-      add(sh.obj, sharedGeo.upperArm, this.mats.primary);
-      add(el.obj, sharedGeo.foreArm, this.mats.secondary);
-      add(el.obj, sharedGeo.hand, this.mats.dark, 0, -0.31, 0);
-    }
-    for (const [hp, kn, an] of [[this.hipL, this.kneeL, this.ankleL], [this.hipR, this.kneeR, this.ankleR]]) {
-      add(hp.obj, sharedGeo.thigh, this.mats.secondary);
-      add(kn.obj, sharedGeo.shin, this.mats.primary);
-      add(an.obj, sharedGeo.shoe, this.mats.dark, 0, 0.01, 0.05);
-      add(an.obj, sharedGeo.sole, this.mats.sole, 0, -0.04, 0.05, false);
-    }
-
-    this.hatSlot = new THREE.Group();
-    this.hatSlot.position.y = 0.16;
-    this.head.obj.add(this.hatSlot);
+    const bones = this.joints.map((j) => j.obj);
+    const inverses = this.joints.map((j) => new THREE.Matrix4().makeTranslation(j.restWorld().negate()));
+    this.skeleton = new THREE.Skeleton(bones, inverses);
+    this.mesh = null; // the merged SkinnedMesh, (re)built by applyCosmetics
+    this.castShadows = true;
 
     // blob shadow (always on: helps judge jumps even with shadows disabled)
     this.blob = new THREE.Mesh(sharedGeo.blob, new THREE.MeshBasicMaterial({ map: blobTexture(), transparent: true, depthWrite: false }));
@@ -188,29 +171,118 @@ export class CharacterModel {
     this.applyCosmetics(cosmetics || {});
   }
 
-  applyCosmetics(c) {
-    this.cosmetics = c;
-    if (c.primary) this.mats.primary.color.set(c.primary);
-    if (c.secondary) this.mats.secondary.color.set(c.secondary);
-    if (c.accent) this.mats.accent.color.set(c.accent);
-    for (const child of [...this.hatSlot.children]) disposeTree(child);
-    this.hatSlot.clear();
-    this._matList = null; // material list changes with the hat
+  /** Every body part: { joint, geometry, colour slot, local transform }. */
+  _parts() {
+    const P = [];
+    const e = new THREE.Euler();
+    const part = (j, geo, slot, pos = [0, 0, 0], rot = [0, 0, 0], scl = [1, 1, 1]) => P.push({
+      j, geo, slot,
+      matrix: new THREE.Matrix4().compose(new THREE.Vector3(...pos), new THREE.Quaternion().setFromEuler(e.set(...rot)), new THREE.Vector3(...scl)),
+    });
+    part(this.hips, sharedGeo.pelvis, 'secondary', [0, 0, 0], [0, 0, Math.PI / 2]);
+    part(this.spine, sharedGeo.torso, 'primary', [0, 0.24, 0]);
+    part(this.spine, sharedGeo.chestPlate, 'secondary', [0, 0.3, 0.18]);
+    part(this.spine, stripeGeo, 'accent', [0, 0.3, 0.205], [0, 0, 0], [0.7, 1, 1]);
+    part(this.head, sharedGeo.head, 'primary', [0, 0.02, 0]);
+    part(this.head, sharedGeo.visor, 'visor', [0, 0.02, 0], [0, Math.PI / 2, 0]); // model faces +Z internally
+    part(this.head, sharedGeo.visorLine, 'accent', [0, -0.005, 0], [Math.PI / 2, 0, Math.PI / 2 - 1.1]);
+    for (const [sh, el] of [[this.shoulderL, this.elbowL], [this.shoulderR, this.elbowR]]) {
+      part(sh, sharedGeo.upperArm, 'primary');
+      part(el, sharedGeo.foreArm, 'secondary');
+      part(el, sharedGeo.hand, 'dark', [0, -0.31, 0]);
+    }
+    for (const [hp, kn, an] of [[this.hipL, this.kneeL, this.ankleL], [this.hipR, this.kneeR, this.ankleR]]) {
+      part(hp, sharedGeo.thigh, 'secondary');
+      part(kn, sharedGeo.shin, 'primary');
+      part(an, sharedGeo.shoe, 'dark', [0, 0.01, 0.05]);
+      part(an, sharedGeo.sole, 'sole', [0, -0.04, 0.05]);
+    }
+    return P;
+  }
+
+  /**
+   * Build the whole character (suit + hat) as ONE skinned mesh: every part is baked into the
+   * rest pose and rigidly bound to its joint's bone, with its colour as a vertex colour.
+   */
+  _buildBody(c) {
+    const colors = { primary: c.primary || '#ff5a3d', secondary: c.secondary || '#20242e', accent: c.accent || '#3df5ff', ...FIXED };
+    const parts = this._parts();
+    const temp = []; // hat geometries, disposed once merged
+    // hat meshes become parts too (bound to the head), keeping each hat material's colour
     const hat = HATS[c.hat];
     if (hat && hat.build) {
-      const obj = hat.build(THREE, c);
-      obj.traverse((o) => {
-        if (o.isMesh) o.castShadow = true;
+      const slot = new THREE.Group();
+      slot.position.y = 0.16;
+      slot.add(hat.build(THREE, c));
+      slot.updateMatrixWorld(true);
+      slot.traverse((o) => {
+        if (!o.isMesh) return;
+        const m = Array.isArray(o.material) ? o.material[0] : o.material;
+        parts.push({ j: this.head, geo: o.geometry, slot: m.isMeshBasicMaterial ? 'hatGlow' : 'hat', matrix: o.matrixWorld.clone(), color: `#${m.color.getHexString()}` });
+        temp.push(o.geometry);
+        m.dispose();
       });
-      this.hatSlot.add(obj);
     }
+    const buckets = [[], [], []];
+    for (const pt of parts) {
+      const m = new THREE.Matrix4().makeTranslation(pt.j.restWorld()).multiply(pt.matrix);
+      buckets[GROUP[pt.slot]].push({ geo: pt.geo, m, bone: this.joints.indexOf(pt.j), color: new THREE.Color(pt.color || colors[pt.slot]) });
+    }
+    const pos = [], nor = [], col = [], si = [], sw = [], idx = [];
+    const groups = [];
+    const v = new THREE.Vector3(), nm = new THREE.Matrix3();
+    for (let gi = 0; gi < 3; gi++) {
+      const start = idx.length;
+      for (const b of buckets[gi]) {
+        const base = pos.length / 3;
+        const P = b.geo.attributes.position, N = b.geo.attributes.normal;
+        nm.getNormalMatrix(b.m);
+        for (let i = 0; i < P.count; i++) {
+          v.fromBufferAttribute(P, i).applyMatrix4(b.m);
+          pos.push(v.x, v.y, v.z);
+          v.fromBufferAttribute(N, i).applyMatrix3(nm).normalize();
+          nor.push(v.x, v.y, v.z);
+          col.push(b.color.r, b.color.g, b.color.b);
+          si.push(b.bone, 0, 0, 0);
+          sw.push(1, 0, 0, 0);
+        }
+        if (b.geo.index) for (let i = 0; i < b.geo.index.count; i++) idx.push(base + b.geo.index.getX(i));
+        else for (let i = 0; i < P.count; i++) idx.push(base + i);
+      }
+      groups.push([start, idx.length - start]);
+    }
+    for (const g of temp) g.dispose();
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    g.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(si, 4));
+    g.setAttribute('skinWeight', new THREE.Float32BufferAttribute(sw, 4));
+    g.setIndex(idx);
+    groups.forEach(([s0, n], i) => g.addGroup(s0, n, i));
+    const mesh = new THREE.SkinnedMesh(g, [this.mats.body, this.mats.visor, this.mats.glow]);
+    mesh.name = 'body';
+    mesh.bind(this.skeleton, new THREE.Matrix4()); // bound in the rest pose at the body's origin
+    mesh.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 1.0, 0), 1.7);
+    mesh.castShadow = this.castShadows && !this.cloakOn;
+    return mesh;
+  }
+
+  applyCosmetics(c) {
+    this.cosmetics = c;
+    if (this.mesh) {
+      this.body.remove(this.mesh);
+      this.mesh.geometry.dispose();
+    }
+    this.mesh = this._buildBody(c);
+    this.body.add(this.mesh);
+    this._matList = null;
   }
 
   /** Real shadow casting on/off (off on lower presets: the blob shadow is used instead). */
   setCastShadows(on) {
-    this.body.traverse((o) => {
-      if (o.isMesh) o.castShadow = on && o.geometry !== sharedGeo.hand && o.geometry !== sharedGeo.sole;
-    });
+    this.castShadows = on;
+    if (this.mesh && !this.cloakOn) this.mesh.castShadow = on;
   }
 
   setName(text, color = '#ffffff') {
@@ -246,15 +318,48 @@ export class CharacterModel {
     if (this.nameSprite) this.nameSprite.visible = v;
   }
 
-  setIt(isIt, infected = false) {
+  /** kind: null (classic IT), 'infection' (green) or 'potato' (a lit bomb instead of the crown). */
+  setIt(isIt, kind = null) {
+    if (kind === true) kind = 'infection';
     this.isIt = isIt;
-    this.itGroup.visible = isIt && !this.cloakOn;
-    this.itRing.visible = isIt && !this.cloakOn;
-    const col = infected ? '#7dff3d' : '#ff3b2f';
+    this.itKind = kind;
+    this._itVisibility();
+    const col = kind === 'infection' ? '#7dff3d' : kind === 'potato' ? '#ff8a2f' : '#ff3b2f';
     this.itGroup.children.forEach((m) => m.material.color.set(col));
     this.itRing.material.color.set(col);
-    this.mats.primary.emissive.set(isIt ? col : '#000000');
-    this.mats.primary.emissiveIntensity = isIt ? 0.35 : 0;
+    this.mats.body.emissive.set(isIt ? col : '#000000');
+    this.mats.body.emissiveIntensity = isIt ? 0.22 : 0;
+  }
+
+  _itVisibility() {
+    const show = !!this.isIt && !this.cloakOn;
+    const potato = this.itKind === 'potato';
+    this.itGroup.visible = show && !potato;
+    this.itRing.visible = show;
+    if (potato || this.bomb) this._bomb().group.visible = show && potato;
+  }
+
+  /** Hot Potato: the bomb floating over the holder's head (built on first use). */
+  _bomb() {
+    if (this.bomb) return this.bomb;
+    const g = new THREE.Group();
+    const body = new THREE.Mesh(new THREE.SphereGeometry(0.24, 18, 12), new THREE.MeshStandardMaterial({ color: '#1c1c22', roughness: 0.35, metalness: 0.4, emissive: '#ff3b2f', emissiveIntensity: 0 }));
+    const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.09, 10), new THREE.MeshStandardMaterial({ color: '#444a52', metalness: 0.7, roughness: 0.3 }));
+    cap.position.y = 0.24;
+    const wick = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.18, 6), new THREE.MeshStandardMaterial({ color: '#c9a227' }));
+    wick.position.set(0.03, 0.34, 0);
+    wick.rotation.z = -0.35;
+    const sparkMat = new THREE.MeshBasicMaterial({ color: '#ffd23d' });
+    sparkMat.toneMapped = false;
+    const spark = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 6), sparkMat);
+    spark.position.set(0.07, 0.43, 0);
+    g.add(body, cap, wick, spark);
+    g.position.y = 2.42;
+    g.visible = false;
+    this.root.add(g);
+    this.bomb = { group: g, body, spark };
+    this.potatoHeat = 0;
+    return this.bomb;
   }
 
   /** Dizzy stars orbiting the head (tagger stunned by a perfect dodge). */
@@ -321,19 +426,9 @@ export class CharacterModel {
         if (!on) m.opacity = this.ghost ? 0.25 : 1;
       }
       this.blob.visible = !on && !this.ghost;
-      this.itGroup.visible = !!this.isIt && !on;
-      this.itRing.visible = !!this.isIt && !on;
+      this._itVisibility();
       if (this.nameSprite) this.nameSprite.material.opacity = on ? 0 : 1;
-      this.body.traverse((o) => {
-        if (o.isMesh) {
-          if (on) {
-            o.userData.castSaved = o.castShadow;
-            o.castShadow = false;
-          } else if (o.userData.castSaved !== undefined) {
-            o.castShadow = o.userData.castSaved;
-          }
-        }
-      });
+      this.mesh.castShadow = !on && this.castShadows;
     }
     if (on) for (const m of this._allMats()) m.opacity = alpha;
   }
@@ -344,25 +439,20 @@ export class CharacterModel {
    */
   bakePose() {
     this.root.updateMatrixWorld(true);
-    const positions = [];
-    const indices = [];
+    const m = this.mesh;
+    const src = m.geometry;
+    const count = src.attributes.position.count;
+    const positions = new Float32Array(count * 3);
     const v = new THREE.Vector3();
-    let base = 0;
-    this.body.traverse((o) => {
-      if (!o.isMesh || !o.visible) return;
-      const g = o.geometry;
-      const pos = g.attributes.position;
-      for (let i = 0; i < pos.count; i++) {
-        v.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld);
-        positions.push(v.x, v.y, v.z);
-      }
-      if (g.index) for (let i = 0; i < g.index.count; i++) indices.push(base + g.index.getX(i));
-      else for (let i = 0; i < pos.count; i++) indices.push(base + i);
-      base += pos.count;
-    });
+    for (let i = 0; i < count; i++) {
+      m.getVertexPosition(i, v).applyMatrix4(m.matrixWorld); // CPU skinning
+      positions[i * 3] = v.x;
+      positions[i * 3 + 1] = v.y;
+      positions[i * 3 + 2] = v.z;
+    }
     const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-    geo.setIndex(indices);
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geo.setIndex(new THREE.BufferAttribute(src.index.array.slice(), 1));
     geo.computeBoundingSphere();
     return geo;
   }
@@ -448,6 +538,18 @@ export class CharacterModel {
       J.shoulderR.set(-0.3, 0, -1.0); J.elbowR.set(-0.6);
       J.ankleL.set(0.3); J.ankleR.set(0.3);
       lambda = 26;
+    } else if (st === MS.RIDE) {
+      // riding a water slide: lying back, feet first, arms up
+      rootY = -0.55;
+      J.hips.set(-0.35, 0, 0);
+      J.spine.set(-0.75, 0, Math.sin(time * 3) * 0.08);
+      J.neck.set(0.5); J.head.set(0.1);
+      J.hipL.set(-1.45, 0, 0.12); J.kneeL.set(0.12);
+      J.hipR.set(-1.45, 0, -0.12); J.kneeR.set(0.12);
+      J.shoulderL.set(-2.7, 0, 0.35); J.elbowL.set(-0.25);
+      J.shoulderR.set(-2.7, 0, -0.35); J.elbowR.set(-0.25);
+      J.ankleL.set(0.5); J.ankleR.set(0.5);
+      lambda = 14;
     } else if (st === MS.GRAPPLE) {
       // zipping along the rope: both arms reaching for the hook, legs trailing behind
       J.hips.set(0.35, 0, 0);
@@ -565,6 +667,18 @@ export class CharacterModel {
       const pulse = 1 + Math.sin(this.itTime * 6) * 0.08;
       this.itRing.scale.set(pulse, pulse, pulse);
     }
+    if (this.bomb?.group.visible) {
+      // the fuse burns: the spark flickers and the bomb glows faster as it runs out
+      this.itTime += dt;
+      const heat = this.potatoHeat || 0;
+      const b = this.bomb;
+      b.group.rotation.y = this.itTime * 1.5;
+      b.group.position.y = 2.42 + Math.sin(this.itTime * 5) * 0.05;
+      b.spark.scale.setScalar(0.7 + Math.random() * 0.8);
+      b.body.material.emissiveIntensity = heat * (0.5 + 0.5 * Math.sin(this.itTime * (5 + heat * 22)));
+      const pulse = 1 + Math.sin(this.itTime * (6 + heat * 14)) * 0.1;
+      this.itRing.scale.set(pulse, pulse, pulse);
+    }
   }
 
   poseEmote(time) {
@@ -605,11 +719,12 @@ export class CharacterModel {
   dispose() {
     // free every per-character GPU resource (shared geometries are kept for the next model)
     if (this.nameSprite) this.nameSprite.material.map.dispose();
+    this.skeleton.dispose();
     disposeTree(this.root);
   }
 }
 
-const SHARED_GEOS = new Set(Object.values(sharedGeo));
+const SHARED_GEOS = new Set([...Object.values(sharedGeo), stripeGeo]);
 
 function disposeTree(obj) {
   obj.traverse((o) => {

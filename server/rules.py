@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import math
 
-MODES = ("classic", "infection", "elimination", "practice")
+MODES = ("classic", "infection", "elimination", "practice", "hotpotato", "zone")
+KNOCKOUT = ("elimination", "hotpotato", "zone")
 NEVER = -1e9
 
 
-def create_match(mode, players, start_it, cfg, countdown=None):
+def create_match(mode, players, start_it, cfg, countdown=None, zone=None):
     if mode not in MODES:
         raise ValueError(f"Unknown mode {mode}")
     mode_cfg = cfg["modes"][mode]
@@ -30,6 +31,12 @@ def create_match(mode, players, start_it, cfg, countdown=None):
         "result": None,
         "tagCount": 0,
     }
+    if mode == "hotpotato":
+        state["potato"] = {"fuse": mode_cfg["fuse"], "max": mode_cfg["fuse"], "min": mode_cfg["fuseMin"], "step": mode_cfg["fuseStep"], "round": 1}
+    if mode == "zone":
+        z = zone or {"x0": 0, "z0": 0, "x1": 0, "z1": 0, "r0": 60}
+        state["zone"] = {"x0": z["x0"], "z0": z["z0"], "x1": z["x1"], "z1": z["z1"], "r0": z["r0"], "r1": mode_cfg["minRadius"],
+                         "hold": mode_cfg["zoneHold"], "end": mode_cfg["zoneEnd"], "limit": mode_cfg["outsideLimit"]}
     for p in players:
         add_player(state, p["id"], p.get("name"))
     state["phase"] = "countdown" if cd > 0 else "playing"
@@ -67,12 +74,13 @@ def add_player(state, pid, name=None):
         "perfectDodges": 0,
         "lastPerfectAt": NEVER,
         "coinsPicked": 0,
+        "stormTime": 0.0,
     }
     if state["phase"] == "playing":
         if state["mode"] == "infection":
             p["it"] = True
             p["wasIt"] = True
-        if state["mode"] == "elimination":
+        if state["mode"] in KNOCKOUT:
             p["out"] = True
             p["outAt"] = state["time"]
         p["protectedUntil"] = state["time"] + state["tagCfg"]["spawnProtection"]
@@ -110,10 +118,66 @@ def tick(state, dt):
                 p["itTime"] += dt
             else:
                 p["aliveTime"] += dt
-        if state["duration"] > 0 and state["time"] >= state["duration"]:
+        if state.get("potato"):
+            state["potato"]["fuse"] -= dt
+            if state["potato"]["fuse"] <= 0:
+                out.extend(_explode(state))
+        if state["phase"] == "playing" and state["duration"] > 0 and state["time"] >= state["duration"]:
             out.extend(end_match(state, "time"))
     state["events"].extend(out)
     return out
+
+
+def _explode(state):
+    """Hot potato fuse ran out. Mirrors explode() in rules.js."""
+    evs = []
+    for h in it_players(state):
+        h["out"] = True
+        h["outAt"] = state["time"]
+        h["it"] = False
+        evs.append({"type": "exploded", "id": h["id"], "time": state["time"]})
+    alive = [p for p in _live(state) if not p["out"]]
+    pt = state["potato"]
+    if len(alive) >= 2:
+        nxt = sorted(alive, key=lambda p: (p["itTime"], state["order"].index(p["id"])))[0]
+        nxt["it"] = True
+        nxt["wasIt"] = True
+        nxt["frozenUntil"] = state["time"] + state["tagCfg"]["newItFreeze"]
+        nxt["lastTagAt"] = state["time"]
+        pt["round"] += 1
+        pt["max"] = max(pt["min"], pt["max"] - pt["step"])
+        evs.append({"type": "it", "id": nxt["id"], "from": None, "reason": "potato"})
+    pt["fuse"] = pt["max"]
+    evs.extend(check_end(state))
+    return evs
+
+
+def zone_tick(state, pid, dt, outside):
+    """Shrinking zone: runners outside the ring too long are out. Mirrors zoneTick() in rules.js."""
+    z = state.get("zone")
+    p = state["players"].get(pid)
+    if not z or state["phase"] != "playing" or not p or not p["connected"] or p["out"] or p["it"]:
+        return []
+    if not outside:
+        p["stormTime"] = max(0.0, p["stormTime"] - dt * 0.5)
+        return []
+    p["stormTime"] += dt
+    if p["stormTime"] < z["limit"]:
+        return []
+    p["out"] = True
+    p["outAt"] = state["time"]
+    ev = {"type": "eliminated", "id": pid, "by": None, "reason": "zone"}
+    state["events"].append(ev)
+    return [ev] + check_end(state)
+
+
+def zone_at(state, t=None):
+    z = state.get("zone")
+    if not z:
+        return None
+    t = state["time"] if t is None else t
+    k = max(0.0, min(1.0, (t - z["hold"]) / (z["end"] - z["hold"])))
+    return {"x": z["x0"] + (z["x1"] - z["x0"]) * k, "z": z["z0"] + (z["z1"] - z["z0"]) * k, "r": z["r0"] + (z["r1"] - z["r0"]) * k, "k": k}
 
 
 def can_tag(state, tagger_id, target_id):
@@ -160,7 +224,7 @@ def apply_tag(state, tagger_id, target_id):
     state["tagCount"] += 1
     events.append({"type": "tag", "tagger": tagger_id, "target": target_id, "time": now, "seq": state["tagCount"]})
     mode = state["mode"]
-    if mode in ("classic", "practice"):
+    if mode in ("classic", "practice", "hotpotato"):
         a["it"] = False
         b["it"] = True
         b["wasIt"] = True
@@ -175,7 +239,7 @@ def apply_tag(state, tagger_id, target_id):
         b["frozenUntil"] = now + t["newItFreeze"]
         b["lastTagAt"] = now
         events.append({"type": "infected", "id": target_id, "by": tagger_id})
-    elif mode == "elimination":
+    elif mode in ("elimination", "zone"):
         b["out"] = True
         b["outAt"] = now
         events.append({"type": "eliminated", "id": target_id, "by": tagger_id})
@@ -270,8 +334,12 @@ def check_end(state):
         return []
     if state["mode"] == "infection" and len(runners(state)) == 0:
         return end_match(state, "all_infected")
-    if state["mode"] == "elimination":
+    if state["mode"] in ("elimination", "zone"):
         alive = runners(state)
+        if len(alive) <= 1:
+            return end_match(state, "last_runner" if len(alive) == 1 else "all_out")
+    if state["mode"] == "hotpotato":
+        alive = [p for p in players if not p["out"]]
         if len(alive) <= 1:
             return end_match(state, "last_runner" if len(alive) == 1 else "all_out")
     return []
@@ -307,6 +375,9 @@ def compute_result(state, reason):
             team = "infected"
             winners = [p["id"] for p in allp if p["it"] and p["connected"]]
         ranked = sorted(allp, key=lambda p: (_gone(p), int(p["it"]), -p["aliveTime"], -p["tags"], p["id"]))
+    elif mode == "hotpotato":
+        winners = [p["id"] for p in allp if not p["out"] and p["connected"]]
+        ranked = sorted(allp, key=lambda p: (0 if p["id"] in winners else 1, _gone(p), -(p["outAt"] if p["out"] else math.inf), p["itTime"], p["id"]))
     else:
         alive = [p for p in allp if not p["it"] and not p["out"] and p["connected"]]
         if alive:
@@ -350,7 +421,7 @@ def _gone(p):
 
 def snapshot(state):
     t = state["time"]
-    return {
+    snap = {
         "mode": state["mode"],
         "phase": state["phase"],
         "countdown": _r2(state["countdown"]),
@@ -370,10 +441,17 @@ def snapshot(state):
                 "bo": _r2(max(0.0, p["boostUntil"] - t)),
                 "pd": p["perfectDodges"],
                 "co": p["coinsPicked"],
+                "st": _r2(p["stormTime"]),
             }
             for pid, p in ((i, state["players"][i]) for i in state["order"])
         ],
     }
+    if state.get("potato"):
+        pt = state["potato"]
+        snap["potato"] = {"fuse": _r2(pt["fuse"]), "max": pt["max"], "round": pt["round"]}
+    if state.get("zone"):
+        snap["zone"] = dict(state["zone"])
+    return snap
 
 
 def time_left(state):

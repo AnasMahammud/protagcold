@@ -76,7 +76,7 @@ export const DEFAULT_SETTINGS = {
     bindings: DEFAULT_BINDINGS,
   },
   camera: { fov: 78, distance: 4.4, sprintFov: true, shake: true, landingDip: true },
-  graphics: { quality: 'high', renderScale: 1.0, fpsLimit: 0, showFps: false, vsync: true, autoDetected: false },
+  graphics: { quality: 'high', renderScale: 1.0, fpsLimit: 0, showFps: false, vsync: true, autoDetected: false, dynamicRes: true },
   accessibility: { reduceFlashing: false, hudScale: 1.0, itOutline: true, largeText: false, dodgeAssist: false },
   player: { name: '' },
 };

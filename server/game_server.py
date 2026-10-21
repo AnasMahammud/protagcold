@@ -28,7 +28,7 @@ CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ"
 NAME_RE = re.compile(r"[^\w\- ]")
 HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 RECONNECT_GRACE = 30.0
-ONLINE_MODES = ("classic", "infection", "elimination")
+ONLINE_MODES = ("classic", "infection", "elimination", "hotpotato", "zone")
 TAG_RE = re.compile(r"^[A-Z0-9]{6}$")  # persistent friend code chosen by the client
 TAG_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 CHAT_MAX = 140
@@ -43,6 +43,15 @@ def _vec3(v):
     if isinstance(v, list) and len(v) == 3 and all(isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x) for x in v):
         return [float(x) for x in v]
     return None
+
+
+def zone_plan(mapdata):
+    """Shrinking Zone layout (mirrors zonePlan in localMatch.js): starts over the whole map and
+    closes toward one of its ground-level spawns."""
+    x0, z0, x1, z1 = mapdata.bounds
+    ground = [s for s in mapdata.spawns if s[1] < 1] or mapdata.spawns
+    end = random.choice(ground)
+    return {"x0": (x0 + x1) / 2, "z0": (z0 + z1) / 2, "x1": end[0], "z1": end[2], "r0": math.hypot(x1 - x0, z1 - z0) / 2 + 2}
 
 
 def clean_loadout(lo):
@@ -141,7 +150,7 @@ class Match:
             self.motion[c.id] = PlayerMotion(s, yaw, t)
         start_it = [random.choice(self.roster_ids)]
         self.state = R.create_match(room.mode, [{"id": c.id, "name": c.name} for c in roster], start_it, cfg,
-                                    countdown=cfg["match"]["countdown"])
+                                    countdown=cfg["match"]["countdown"], zone=zone_plan(self.map) if room.mode == "zone" else None)
         self.loaded: set[str] = set()
         self.task: asyncio.Task | None = None
         self.last_tag_req: dict[str, float] = {}
@@ -152,10 +161,23 @@ class Match:
         self.coins: dict[str, list] = {}
         self.coin_seq = 0
         self.coin_respawns: list[float] = []
+        self.bonus_coins: set[str] = set()  # coin rain: never respawn
         for _ in range(min(cfg["coins"]["mapCoins"], len(self.map.coin_spots))):
             self.spawn_coin()
+        # map events (power outage, coin rain...): scheduled here, applied by every client
+        self.event_kinds = list((self.map.data.get("env") or {}).get("events") or [])
+        self.event = None
+        self.event_fired = False
+        self.last_event = None
+        self.next_event_at = random.uniform(*cfg["mapEvents"]["firstAt"])
 
-    def spawn_coin(self):
+    def snapshot(self):
+        snap = R.snapshot(self.state)
+        if self.event:
+            snap["ev"] = self.event
+        return snap
+
+    def spawn_coin(self, bonus=False):
         used = list(self.coins.values())
         options = [s for s in self.map.coin_spots if all(math.hypot(u[0] - s[0], u[2] - s[2]) >= 1 for u in used)]
         if not options:
@@ -164,6 +186,8 @@ class Match:
         self.coin_seq += 1
         cid = f"c{self.coin_seq}"
         self.coins[cid] = [s[0], s[1], s[2]]
+        if bonus:
+            self.bonus_coins.add(cid)
         return cid
 
     def start_message(self):
@@ -176,7 +200,7 @@ class Match:
                          "cosm": self.room.players[pid].cosm if pid in self.room.players else {}}
                         for pid in self.roster_ids],
             "spawns": self.spawns,
-            "rules": R.snapshot(self.state),
+            "rules": self.snapshot(),
             "coins": [[cid, *p] for cid, p in self.coins.items()],
         }
 
@@ -310,7 +334,7 @@ class GameServer:
                     R.add_player(m.state, old.id, old.name)  # marks the slot connected again
                     await old.send(m.resync_message())
                     await self.broadcast(room, {"t": "player_back", "id": old.id}, exclude=old.id)
-                    await self.broadcast(room, {"t": "rules", "rules": R.snapshot(m.state)})
+                    await self.broadcast(room, {"t": "rules", "rules": m.snapshot()})
             return old
         cid = f"p{self._next_id}"
         self._next_id += 1
@@ -353,7 +377,7 @@ class GameServer:
             await self.broadcast(room, {"t": "player_left", "id": client.id})
             for ev in events:
                 await self.broadcast(room, {"t": "event", "ev": ev})
-            await self.broadcast(room, {"t": "rules", "rules": R.snapshot(m.state)})
+            await self.broadcast(room, {"t": "rules", "rules": m.snapshot()})
             asyncio.ensure_future(self._expire(client))
         else:
             await self.leave_room(client)
@@ -752,7 +776,10 @@ class GameServer:
             await c.send({"t": "coin_denied", "id": cid})
             return
         del m.coins[cid]
-        m.coin_respawns.append(now() + self.cfg["coins"]["respawn"])
+        if cid in m.bonus_coins:
+            m.bonus_coins.discard(cid)
+        else:
+            m.coin_respawns.append(now() + self.cfg["coins"]["respawn"])
         await self.broadcast(room, {"t": "coin_taken", "id": cid, "by": c.id})
 
     async def _coin_respawns(self, room, m):
@@ -895,7 +922,7 @@ class GameServer:
         log.info("room %s: %s PERFECT-DODGED %s", room.code, b, a)
         for ev in res["events"]:
             await self.broadcast(room, {"t": "event", "ev": ev})
-        await self.broadcast(room, {"t": "rules", "rules": R.snapshot(m.state)})
+        await self.broadcast(room, {"t": "rules", "rules": m.snapshot()})
         return True
 
     async def _apply_tag(self, room, m, a, b):
@@ -908,7 +935,7 @@ class GameServer:
         log.info("room %s: %s tagged %s", room.code, a, b)
         for ev in res["events"]:
             await self.broadcast(room, {"t": "event", "ev": ev})
-        await self.broadcast(room, {"t": "rules", "rules": R.snapshot(m.state)})
+        await self.broadcast(room, {"t": "rules", "rules": m.snapshot()})
         return True
 
     async def on_emote(self, c, msg):
@@ -925,7 +952,7 @@ class GameServer:
                 await asyncio.sleep(0.05)
             room.phase = "playing"
             await self.broadcast_room(room)
-            await self.broadcast(room, {"t": "rules", "rules": R.snapshot(m.state)})
+            await self.broadcast(room, {"t": "rules", "rules": m.snapshot()})
             last = now()
             snap_t = 0.0
             rules_t = 0.0
@@ -943,10 +970,13 @@ class GameServer:
                     await self._perfect_dodges(room, m)
                     await self._auto_tags(room, m)
                     await self._coin_respawns(room, m)
+                    if m.state.get("zone"):
+                        await self._zone_check(room, m, dt)
+                    await self._map_events(room, m)
                 rules_t += dt
                 if events or rules_t >= 0.25 or prev_phase != m.state["phase"]:
                     rules_t = 0.0
-                    await self.broadcast(room, {"t": "rules", "rules": R.snapshot(m.state)})
+                    await self.broadcast(room, {"t": "rules", "rules": m.snapshot()})
                 snap_t += dt
                 if snap_t >= 1.0 / self.snap_hz:
                     snap_t = 0.0
@@ -962,6 +992,51 @@ class GameServer:
             room.match = None
             await self.broadcast(room, {"t": "error", "code": "match", "msg": "The match ended because of a server error."})
             await self.broadcast_room(room)
+
+    async def _map_events(self, room, m):
+        """Schedule map events (mirrors EventScheduler in mapEvents.js) and run coin rain."""
+        me = self.cfg["mapEvents"]
+        if not m.event_kinds:
+            return
+        t = m.state["time"]
+        changed = False
+        if m.event and t >= m.event["end"]:
+            m.event = None
+            m.next_event_at = t + random.uniform(*me["gap"])
+            changed = True
+        if not m.event and t >= m.next_event_at - me["warn"]:
+            dur = m.state["duration"]
+            if dur > 0 and m.next_event_at + 12 > dur:
+                m.next_event_at = math.inf  # too close to the end of the match
+            else:
+                pool = [k for k in m.event_kinds if k != m.last_event] or m.event_kinds
+                kind = random.choice(pool)
+                m.last_event = kind
+                m.event = {"kind": kind, "start": round(m.next_event_at, 2), "end": round(m.next_event_at + me["events"][kind]["duration"], 2)}
+                m.event_fired = False
+                changed = True
+        if m.event and not m.event_fired and t >= m.event["start"]:
+            m.event_fired = True
+            if m.event["kind"] == "coinrain":
+                for _ in range(me["rainCoins"]):
+                    cid = m.spawn_coin(bonus=True)
+                    if not cid:
+                        break
+                    await self.broadcast(room, {"t": "coin_spawn", "id": cid, "p": m.coins[cid], "drop": True})
+        if changed:
+            await self.broadcast(room, {"t": "rules", "rules": m.snapshot()})
+
+    async def _zone_check(self, room, m, dt):
+        """Shrinking Zone: runners outside the ring (server-side positions) are knocked out."""
+        z = R.zone_at(m.state)
+        events = []
+        for pid, mo in m.motion.items():
+            outside = math.hypot(mo.pos[0] - z["x"], mo.pos[2] - z["z"]) > z["r"]
+            events.extend(R.zone_tick(m.state, pid, dt, outside))
+        for ev in events:
+            await self.broadcast(room, {"t": "event", "ev": ev})
+        if events:
+            await self.broadcast(room, {"t": "rules", "rules": m.snapshot()})
 
     async def _auto_tags(self, room, m):
         """Strict server-side contact detection (no lag compensation) as a backstop."""
@@ -984,9 +1059,11 @@ class GameServer:
             p = m.state["players"].get(pid)
             if not p or not p["connected"]:
                 continue
+            # last field: when the server received this movement (not when the snapshot goes out),
+            # so clients interpolate on the real timing and can use a much smaller delay
             rows.append([pid, round(mo.pos[0], 3), round(mo.pos[1], 3), round(mo.pos[2], 3),
                          round(mo.vel[0], 2), round(mo.vel[1], 2), round(mo.vel[2], 2),
-                         round(mo.yaw, 2), mo.st, mo.fl, round(mo.sc, 2)])
+                         round(mo.yaw, 2), mo.st, mo.fl, round(mo.sc, 2), round(mo.last_time, 3)])
         await self.broadcast(room, {"t": "snap", "ts": now(), "p": rows})
 
     async def _finish(self, room, m):

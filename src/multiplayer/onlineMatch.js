@@ -9,6 +9,8 @@ import { audio } from '../audio/audio.js';
 import { progression } from '../progression/progression.js';
 import { reasonText } from '../gameplay/localMatch.js';
 import { MapCoins } from '../gameplay/coins.js';
+import { zoneAt } from '../gameplay/rules.js';
+import { eventMods } from '../gameplay/mapEvents.js';
 
 export class OnlineMatch extends MatchSession {
   static async create(game, net, start) {
@@ -25,6 +27,9 @@ export class OnlineMatch extends MatchSession {
     this.seq = 0;
     this.sendT = 0;
     this.sendInterval = 1 / this.cfg.tick.netSendHz;
+    // adaptive interpolation delay: just enough to cover the measured arrival jitter
+    this.jitter = 0.01;
+    this.interpDelay = this.cfg.tick.interpDelayMs / 1000;
     this.rules = start.rules;
     this.rulesAt = net.now();
     this.tagCooldown = new Map();
@@ -67,7 +72,7 @@ export class OnlineMatch extends MatchSession {
       this.game.cameraRig.shake(0.35);
     });
     on('coin_taken', (m) => this.coins.take(m.id, m.by));
-    on('coin_spawn', (m) => this.coins.spawn(m.id, { x: m.p[0], y: m.p[1], z: m.p[2] }));
+    on('coin_spawn', (m) => this.coins.spawn(m.id, { x: m.p[0], y: m.p[1], z: m.p[2] }, { drop: !!m.drop }));
     on('coin_denied', (m) => this.coins.pending.delete(m.id));
     on('emote', (m) => {
       const p = this.players.get(m.id);
@@ -115,11 +120,18 @@ export class OnlineMatch extends MatchSession {
 
   onSnap(m) {
     for (const s of m.p) {
-      const [id, x, y, z, vx, vy, vz, yaw, st, fl, sc] = s;
+      const [id, x, y, z, vx, vy, vz, yaw, st, fl, sc, rt] = s;
       if (id === this.localId) continue;
       const p = this.players.get(id);
       if (!p) continue;
-      p.pushSnapshot(m.ts, { x, y, z, vx, vy, vz, yaw, state: st, grounded: !!(fl & 1), sprinting: !!(fl & 2), scriptProgress: sc || 0 });
+      const t = rt ?? m.ts; // per-player receive time (newer servers), else the snapshot time
+      const last = p.buffer[p.buffer.length - 1];
+      if (last && t <= last.t) continue; // nothing new from this player since the last snapshot
+      if (last) {
+        const gap = t - last.t;
+        if (gap < 0.5) this.jitter += (Math.abs(gap - this.sendInterval) - this.jitter) * 0.05;
+      }
+      p.pushSnapshot(t, { x, y, z, vx, vy, vz, yaw, state: st, grounded: !!(fl & 1), sprinting: !!(fl & 2), scriptProgress: sc || 0 });
     }
   }
 
@@ -193,10 +205,16 @@ export class OnlineMatch extends MatchSession {
         p.boostLeft = Math.max(0, p.boostLeft - dt);
         p.boosted = p.boostLeft > 0;
       }
-      p.ctrl.speedMultiplier = (p.it ? this.cfg.tag.itSpeedBonus : 1) * (p.boosted ? this.cfg.perfectDodge.boostSpeed : 1);
+      const mods = eventMods(this.rules.ev || null, this.rulesView().time);
+      p.ctrl.speedMultiplier = (p.it ? this.cfg.tag.itSpeedBonus : 1) * (p.boosted ? this.cfg.perfectDodge.boostSpeed : 1) * mods.speed;
+      p.ctrl.gravityScale = mods.gravity;
+      p.ctrl.traction = mods.traction;
       p.ctrl.step(phase === 'countdown' ? ZERO : inp, dt);
       // tell the server the moment we dodge: it decides whether it was a PERFECT dodge
       if (p.ctrl.events.some((e) => e.type === 'dodge')) this.net.send('dodge', {});
+      // sudden moves (jump, dodge, slide, vault, pad, slide ride...) go out right away instead
+      // of waiting for the next regular update: other players see them sooner
+      if (p.ctrl.events.some((e) => SNAP_NOW.has(e.type))) this.sendT = this.sendInterval;
       this.handleMoveEvents(p);
     }
     this.abilities.step(dt);
@@ -237,7 +255,10 @@ export class OnlineMatch extends MatchSession {
   }
 
   renderPlayers(dt, time, alpha) {
-    const renderT = this.net.serverNow() - this.cfg.tick.interpDelayMs / 1000;
+    const tk = this.cfg.tick;
+    const want = Math.min(tk.interpDelayMs / 1000, Math.max((tk.minInterpDelayMs ?? 45) / 1000, this.sendInterval * 1.25 + this.jitter * 2.5 + 0.01));
+    this.interpDelay += (want - this.interpDelay) * Math.min(1, dt * 0.8);
+    const renderT = this.net.serverNow() - this.interpDelay;
     for (const p of this.players.values()) {
       if (p.kind !== 'remote') continue;
       const prev = this.remotePrev.get(p.id) || { state: MS.GROUND, grounded: true, vy: 0 };
@@ -284,17 +305,26 @@ export class OnlineMatch extends MatchSession {
       const p = this.players.get(rp.id);
       return { id: rp.id, name: p?.name ?? rp.id, it: rp.it, out: rp.out, tags: rp.tags, itTime: rp.itTime, survival: rp.alive, me: rp.id === this.localId, bot: false };
     });
+    const me = r.players.find((x) => x.id === this.localId);
     return {
       phase: r.phase,
       countdown: cd,
       timeLeft: r.duration > 0 ? Math.max(0, r.duration - time) : Infinity,
-      localTags: r.players.find((x) => x.id === this.localId)?.tags ?? 0,
+      localTags: me?.tags ?? 0,
       scoreboard,
+      time,
+      // between server updates the fuse and the ring keep moving locally
+      fuse: r.potato ? Math.max(0, r.potato.fuse - elapsed) : null,
+      fuseMax: r.potato?.max ?? null,
+      potatoRound: r.potato?.round ?? null,
+      zone: r.zone ? { ...zoneAt({ zone: r.zone }, time), hold: r.zone.hold, end: r.zone.end, limit: r.zone.limit } : null,
+      localStorm: me?.st || 0,
+      mapEvent: r.ev || null,
     };
   }
 
   netStatus() {
-    return `Ping ${Math.round(this.net.rtt * 1000)} ms`;
+    return `Ping ${Math.round(this.net.rtt * 1000)} ms · delay ${Math.round(this.interpDelay * 1000)} ms`;
   }
 
   dispose() {
@@ -304,6 +334,7 @@ export class OnlineMatch extends MatchSession {
   }
 }
 
+const SNAP_NOW = new Set(['jump', 'walljump', 'dodge', 'slide', 'vault', 'mantle', 'pad', 'ride', 'ride_end', 'blink', 'grapple', 'rocket', 'knocked']);
 const r2 = (v) => Math.round(v * 100) / 100;
 const r3 = (v) => Math.round(v * 1000) / 1000;
 const ZERO = Object.freeze({ mx: 0, mz: 0, jumpPressed: false, jumpHeld: false, sprint: false, slidePressed: false, dodgePressed: false, vaultPressed: false });

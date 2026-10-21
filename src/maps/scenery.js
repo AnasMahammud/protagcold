@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { texture } from './textures.js';
 import { mulberry32 } from '../core/mathUtil.js';
+import { batchStatic } from './batch.js';
 
 export function buildScenery(map, quality, animated) {
   const g = new THREE.Group();
@@ -14,6 +15,7 @@ export function buildScenery(map, quality, animated) {
   const lights = makeLights(map, env, quality);
   g.add(lights);
   g.userData.sun = lights.userData.sun;
+  g.userData.lights = { sun: lights.userData.sun, hemi: lights.userData.hemi, sunBase: lights.userData.sun.intensity, hemiBase: lights.userData.hemi.intensity };
 
   if (map.theme === 'city') {
     g.add(makeSkyline(rng, quality, { inner: 70, outer: 260, count: 220, baseY: -60, night: true }));
@@ -50,8 +52,21 @@ export function buildScenery(map, quality, animated) {
     g.add(ground);
     g.add(makeHills(rng, '#6f9a6a', 200, 30));
     g.add(makeClouds(rng, animated));
-  } else if (map.theme === 'arena') {
-    // fully indoor: nothing visible outside the walls besides bleachers (decor)
+  } else if (map.theme === 'waterpark') {
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(700, 700), new THREE.MeshStandardMaterial({ map: texture('grass'), roughness: 1 }));
+    ground.material.map = ground.material.map.clone();
+    ground.material.map.needsUpdate = true;
+    ground.material.map.repeat.set(170, 170);
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = -0.05;
+    ground.receiveShadow = true;
+    g.add(ground);
+    g.add(makeSkyline(rng, quality, { inner: 140, outer: 300, count: 140, baseY: -1, night: false, silhouette: '#9fb8d0' }));
+    g.add(makeHills(rng, '#7fae7a', 230, 26));
+    g.add(makePalmRing(rng, 90, 46));
+    g.add(makeClouds(rng, animated));
+  } else if (map.theme === 'arena' || map.theme === 'mall' || map.theme === 'factory') {
+    // fully indoor: nothing visible outside the walls
   }
   return g;
 }
@@ -111,6 +126,7 @@ function makeLights(map, env, quality) {
   }
   g.add(sun, sun.target);
   g.userData.sun = sun;
+  g.userData.hemi = hemi;
   return g;
 }
 
@@ -186,6 +202,25 @@ function makeHills(rng, color, radius, count) {
   return g;
 }
 
+/** Silhouette palms around the park (instanced: two draw calls for all of them). */
+function makePalmRing(rng, radius, count) {
+  const g = new THREE.Group();
+  const trunk = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.25, 0.4, 9, 6), new THREE.MeshStandardMaterial({ color: '#7a6048', roughness: 1 }), count);
+  const crown = new THREE.InstancedMesh(new THREE.ConeGeometry(3.2, 2.2, 7), new THREE.MeshStandardMaterial({ color: '#3f8f3a', roughness: 0.9, flatShading: true }), count);
+  const m = new THREE.Matrix4();
+  for (let i = 0; i < count; i++) {
+    const a = (i / count) * Math.PI * 2 + rng() * 0.08;
+    const r = radius + rng() * 22;
+    const s = 0.8 + rng() * 0.5;
+    m.makeScale(s, s, s).setPosition(Math.cos(a) * r, 4.5 * s, Math.sin(a) * r * 0.85);
+    trunk.setMatrixAt(i, m);
+    m.makeScale(s, s * 0.7, s).setPosition(Math.cos(a) * r, 9 * s, Math.sin(a) * r * 0.85);
+    crown.setMatrixAt(i, m);
+  }
+  g.add(trunk, crown);
+  return g;
+}
+
 function makeClouds(rng, animated) {
   const g = new THREE.Group();
   const mat = new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 1, flatShading: true, transparent: true, opacity: 0.92 });
@@ -202,6 +237,8 @@ function makeClouds(rng, animated) {
     c.position.set(Math.cos(a) * r, 55 + rng() * 40, Math.sin(a) * r);
     g.add(c);
   }
+  batchStatic(g); // the clouds drift as one: merge them inside their rotating group
+  g.userData.dynamic = true;
   animated.push((dt) => {
     g.rotation.y += dt * 0.004;
   });

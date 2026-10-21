@@ -15,6 +15,29 @@ The browser page shows each result and exposes `window.__TEST_RESULTS__` for aut
 
 ## Latest results (2026-10-21, development machine: Windows 11, Intel UHD GPU, Chromium)
 
+### v1.02: new maps, modes, map events, performance and lag
+
+- **Python: 79 / 79 passed.** New tests:
+  - Rule parity (both languages): Hot Potato (tags pass the potato, the fuse keeps burning, the holder explodes, the potato goes to whoever held it least, the fuse gets shorter; with two players the first explosion ends it) and Shrinking Zone (4 s outside knocks a runner out, going back in recovers, IT is immune, the ring closes; survivors win on time).
+  - Server, with real WebSocket clients: a Hot Potato match where the fuse runs out, the holder explodes and the other player wins (`last_runner`); a Shrinking Zone match where a runner left 15 m outside a small ring is eliminated by the server after 4 s while the runner inside isn't; a map event announced ahead in the rules snapshot (`ev`), Coin Rain dropping bonus coins that don't respawn once taken; snapshot rows carrying each player's receive time.
+  - Movement validation on the new maps: a boosted slide along a Factory belt in Overdrive is accepted, the same speed on plain floor is rejected; riding a Waterpark slide at Slide Rush speed is accepted along the slide, the same speed on open ground is rejected.
+- **Browser: 128 / 128 passed.** New tests:
+  - The three new maps pass every map check: spawns, navigation connects every spawn both ways, pads, 60 s random-movement stress, coin spots (Mall 35/36 on the bot graph, Waterpark 33/36, Factory 30/36), and a Normal bot catching a runner across the whole map (Mall 44.5 s, Waterpark 39.2 s, Factory 38.3 s).
+  - Zones: water slows you to its speed factor; a conveyor carries you at its speed and Overdrive reverses it at double speed; the Factory's real belts carry you.
+  - Slides: a slide is ridden end to end and shoots you out; Slide Rush makes it faster; Rocket Jump can't interrupt a ride; **every slide on the Waterpark (7) and Factory (1), at normal and Slide Rush speed, lands the rider grounded, inside the map, out of every wall**, and the bots' graph has a ride link for each.
+  - Low gravity jumps higher; wet floors take more than twice as far to stop.
+  - Full 8-bot headless matches: Hot Potato on the Mall (7 explosions, one winner, 119 s), Shrinking Zone on the Waterpark (the ring closed, last runner standing at 130 s) and Classic on the Factory.
+  - Map events: the scheduler warns 3 s ahead, keeps the first event in 30–45 s and the gaps in 40–60 s, never repeats a kind back to back and never starts one in the last 12 s; event effects only apply while the event is on; every map lists known events (the Mall and Factory can lose power); Coin Rain coins don't respawn.
+  - Version: `version.js`, `config/game.json` and the newest changelog entry agree; the changelog is newest first and complete.
+- **Real client checks** (in-app browser): the *What's new* screen opens once for a new version and from the menu; the main menu (10 entries) fits an 800×600 window. Hot Potato on the Waterpark: fuse clock, holder banner, the bomb with its spark over the holder's head, explosion → eliminated → spectating, the next round with a shorter fuse. Shrinking Zone: "Ring closes in …", the red ring wall and vignette with "GET IN THE RING! 2.2 s · 6 m" when outside. A Power Outage on the Mall: warning, lights out with green emergency lights, radar arrow hidden. Riding a Waterpark slide; a bot climbing a spiral tower.
+- **Bugs found and fixed while testing this update:**
+  - The Waterpark's tower stairs were too steep for the bots' navigation (they couldn't reach two spawn points). The flights now collide as smooth slopes with the steps drawn on top.
+  - Slide Rush had no effect on slides too short to reach top speed; it now scales the ride speed itself (and the server allowance).
+  - The red "outside the ring" vignette could stay on into the next match.
+  - A non-finite sound volume (from a broken camera position) threw an error every frame; sounds now fall back to silent.
+  - Earlier in this update: the attract match's arena could stay loaded invisibly behind a match; the Mall's first load took about 5 s (now about 1 s).
+- **Not measured:** new FPS figures. The in-app browser ran in the background, where GPU timings are unreliable (the same scene measured faster with 9 bots than with none). The deterministic part: a full 10-player match now issues about 70–125 draw calls per frame.
+
 ### Abilities, coins and the perfect-dodge rework (2026-10-21)
 
 - **Python: 69 / 69 passed.** New tests:
@@ -86,8 +109,8 @@ Highlights from the browser run:
 | 7 | Invalid tags rejected | shared rule cases: *invalid tags* (self, unknown, IT target, not IT, out), *countdown*, *spawn protection*; integration: out-of-range tag rejected |
 | 8 | Tag cooldowns | shared rule cases: freeze, cooldown, no-tag-back |
 | 9 | Match timers | shared rule cases: timer expiry (classic, infection); headless matches |
-| 10 | Each mode ends correctly | shared rule cases for classic / infection (both outcomes) / Last Runner (both outcomes) / practice never ends; headless matches for each mode |
-| 11 | Bots navigate and recover | browser: *chases down a runner across the whole map* (all 4 maps), *boxed in behind an obstacle recovers*; navigation QA (*graph connects every spawn both ways*, *every jump pad lands somewhere walkable*) |
+| 10 | Each mode ends correctly | shared rule cases for classic / infection (both outcomes) / Last Runner (both outcomes) / practice never ends / Hot Potato / Shrinking Zone (both outcomes); headless matches for each mode; server Hot Potato and Zone matches |
+| 11 | Bots navigate and recover | browser: *chases down a runner across the whole map* (all 7 maps), *boxed in behind an obstacle recovers*; navigation QA (*graph connects every spawn both ways*, *every jump pad lands somewhere walkable*) |
 | 12 | Lobby state synchronised | Python integration: both clients receive the identical room view; host-only settings; readiness; host migration; quick-play pairing; room capacity. Social tests: friend codes, presence (private lobby code hidden until invited), invites, lobby browser (public only), chat (history, sanitising, rate limit), rename/privacy/size clamping, kick + temporary ban |
 | 13 | Disconnects handled safely | Python integration: IT disconnects → `player_left`, IT handed over, match ends with a valid result and award, room returns to lobby; reconnect with token resumes identity; shared rule case *disconnect…* and *players who disconnect are ranked last* |
 | 14 | Settings persist | browser: *settings persist to storage*; manually verified preset switching, FOV and render scale apply live |
@@ -95,7 +118,10 @@ Highlights from the browser run:
 | 16 | No holes, broken collision or out-of-bounds exploits | map builder validation (spawns free and grounded); browser *spawns are free, grounded and inside bounds*; *random-movement stress* (bounds, kill-plane, solids) on all maps |
 | 17 | Playable without a network | offline matches and bots need no connection (three.js is vendored); the headless match tests run the offline path |
 | 18 | Abilities can't break movement or be abused online | browser: Blink/Grapple never end inside geometry, cooldowns; Python: grants, cooldowns, target validation, knockback decided by the server |
-| 19 | Coins are earned fairly | rule parity for the payout; server-owned map coins with distance-checked pickups; every coin spot is reachable |
+| 19 | Coins are earned fairly | rule parity for the payout; server-owned map coins with distance-checked pickups; every coin spot is reachable; Coin Rain coins never respawn (browser and server) |
+| 20 | Water, conveyors and slides behave | browser: water speed factor, conveyor carry and reversal, every slide ridden to a safe landing at both speeds, ride links for bots; server: conveyor and slide movement allowances |
+| 21 | Map events are fair and in sync | browser: scheduler timing, no repeats, nothing at the very end, effects only while active; server: the event is announced in the rules snapshot before it starts |
+| 22 | Players see each update's changes | browser: version and changelog agree; manual: *What's new* opens once per version |
 
 Additional server tests:
 
@@ -142,7 +168,7 @@ Bugs found by this testing and fixed:
 - **Physical gamepads:** implemented with the standard Gamepad API mapping (Xbox/PlayStation layouts), including menu navigation. Untested with a real controller.
 - **Physical touch devices:** touch controls verified in a touch-emulating browser pane only.
 - **A live Cloudflare tunnel and a real cloud deployment:** not run from here. That needs downloading `cloudflared` and opening a public endpoint (your go-ahead), or your hosting account. The launcher logic and cloud configuration are tested as described above.
-- **Real internet latency and packet loss:** tested on localhost (about 3 ms ping). Interpolation, extrapolation and lag-compensation windows are configurable in `config/game.json`.
+- **Real internet latency and packet loss:** tested on localhost (about 3 ms ping). The adaptive interpolation delay, extrapolation and lag-compensation windows are configurable in `config/game.json`. The live site's ping was measured from Ireland at 250–330 ms to first byte (Render's default Oregon region); a Frankfurt server would cut most of that.
 - **Other GPUs and browsers:** measured on Intel UHD with Chromium only. Firefox and Safari should work (standard WebGL 2 and ES modules) but weren't run.
 - **Audio by ear:** the audio graph runs without errors, but no one has listened to the synthesised sounds and music on real speakers.
 
@@ -153,5 +179,5 @@ Bugs found by this testing and fixed:
 - The Shockwave knockback on a remote player starts when *their* client receives the `impulse` (one network trip), not on the caster's screen instantly.
 - Not felt by hand: how the abilities *play* with a real mouse and keyboard, on real hardware, against real people. They were exercised by scripts and tests here, not by a human.
 - Server movement validation is a practical safeguard (speed, teleport, solids, freeze); it doesn't re-simulate physics. The game isn't cheat-proof.
-- Procedural characters and animation (no skinned models); no moving platforms.
+- Procedural characters and animation (no authored or motion-captured models); no moving platforms (conveyors, escalators and slides are the dynamic traversal).
 - No Exit button: not applicable to a browser game.

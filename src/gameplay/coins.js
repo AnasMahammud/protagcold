@@ -8,7 +8,8 @@ import { bus } from '../core/events.js';
 
 let sharedGeo = null;
 let sharedMat = null;
-let glowMat = null;
+let glowTex = null;
+const CAP = 128; // coin rain can put a lot of coins on the map at once
 
 function assets() {
   if (!sharedGeo) {
@@ -23,9 +24,15 @@ function assets() {
     g.addColorStop(1, 'rgba(255,200,60,0)');
     x.fillStyle = g;
     x.fillRect(0, 0, 64, 64);
-    glowMat = new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });
+    glowTex = new THREE.CanvasTexture(c);
   }
 }
+
+const _m = new THREE.Matrix4();
+const _q = new THREE.Quaternion();
+const _p = new THREE.Vector3();
+const _s = new THREE.Vector3(1, 1, 1);
+const _up = new THREE.Vector3(0, 1, 0);
 
 export class MapCoins {
   /** @param authoritative true offline (we spawn + validate), false online (server does). */
@@ -41,6 +48,17 @@ export class MapCoins {
     this.seq = 0;
     this.collected = 0; // by the local player this match
     assets();
+    // every coin is one instance: 2 draw calls for all of them (coin bodies + their glow)
+    this.inst = new THREE.InstancedMesh(sharedGeo, sharedMat, CAP);
+    this.inst.count = 0;
+    this.inst.castShadow = true;
+    this.inst.frustumCulled = false;
+    this.inst.name = 'coins';
+    const gg = new THREE.BufferGeometry();
+    gg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(CAP * 3), 3));
+    this.glow = new THREE.Points(gg, new THREE.PointsMaterial({ map: glowTex, size: 1.4, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, sizeAttenuation: true }));
+    this.glow.frustumCulled = false;
+    session.game.scene.add(this.inst, this.glow);
     if (authoritative) for (let i = 0; i < Math.min(this.cfg.mapCoins, this.spots.length); i++) this._spawnRandom();
   }
 
@@ -57,16 +75,18 @@ export class MapCoins {
     if (pos) this.spawn(`c${++this.seq}`, pos);
   }
 
-  spawn(id, pos) {
-    if (this.coins.has(id)) return;
-    const mesh = new THREE.Mesh(sharedGeo, sharedMat);
-    mesh.position.set(pos.x, pos.y, pos.z);
-    mesh.castShadow = true;
-    const glow = new THREE.Sprite(glowMat);
-    glow.scale.set(1.4, 1.4, 1);
-    mesh.add(glow);
-    this.s.game.scene.add(mesh);
-    this.coins.set(id, { id, pos: { x: pos.x, y: pos.y, z: pos.z }, mesh, phase: this.rng() * 6 });
+  spawn(id, pos, { drop = false, bonus = false } = {}) {
+    if (this.coins.has(id) || this.coins.size >= CAP) return;
+    this.coins.set(id, { id, pos: { x: pos.x, y: pos.y, z: pos.z }, phase: this.rng() * 6, drop: drop ? 1 : 0, bonus });
+  }
+
+  /** Coin Rain event (offline): bonus coins drop from the sky onto free spots. */
+  rain(n) {
+    for (let i = 0; i < n; i++) {
+      const pos = this._freeSpot();
+      if (!pos) break;
+      this.spawn(`r${++this.seq}`, pos, { drop: true, bonus: true });
+    }
   }
 
   /** Remove a coin; `by` = player id that grabbed it (for effects). */
@@ -75,7 +95,6 @@ export class MapCoins {
     this.pending.delete(id);
     if (!c) return;
     this.coins.delete(id);
-    this.s.game.scene.remove(c.mesh);
     const fx = this.s.game.effects;
     fx.burst(c.pos, '#ffd23d', { count: 18, speed: 3.5, size: 0.18, life: 0.5, up: 2 });
     fx.ring({ x: c.pos.x, y: c.pos.y - 0.85, z: c.pos.z }, '#ffd23d', 1.4, 0.3);
@@ -109,7 +128,7 @@ export class MapCoins {
         if (this.authoritative) {
           if (this.s.onCoinPicked?.(p) === false) continue;
           this.take(c.id, p.id);
-          this.respawns.push(this.cfg.respawn);
+          if (!c.bonus) this.respawns.push(this.cfg.respawn);
         } else if (!this.pending.has(c.id)) {
           this.pending.add(c.id);
           this.s.net.send('pickup', { id: c.id });
@@ -121,10 +140,21 @@ export class MapCoins {
 
   /** Per-frame visuals. */
   render(dt, time) {
+    const g = this.glow.geometry.attributes.position;
+    let n = 0;
     for (const c of this.coins.values()) {
-      c.mesh.rotation.y = time * 2.4 + c.phase;
-      c.mesh.position.y = c.pos.y + Math.sin(time * 2 + c.phase) * 0.12;
+      if (c.drop > 0) c.drop = Math.max(0, c.drop - dt * 1.4); // falling in from the sky
+      const y = c.pos.y + Math.sin(time * 2 + c.phase) * 0.12 + c.drop * c.drop * 16;
+      _p.set(c.pos.x, y, c.pos.z);
+      _q.setFromAxisAngle(_up, time * 2.4 + c.phase);
+      this.inst.setMatrixAt(n, _m.compose(_p, _q, _s));
+      g.setXYZ(n, c.pos.x, y, c.pos.z);
+      n++;
     }
+    this.inst.count = n;
+    this.inst.instanceMatrix.needsUpdate = true;
+    g.needsUpdate = true;
+    this.glow.geometry.setDrawRange(0, n);
   }
 
   /** Coin positions for bots that like shiny things. */
@@ -133,7 +163,10 @@ export class MapCoins {
   }
 
   dispose() {
-    for (const c of this.coins.values()) this.s.game.scene.remove(c.mesh);
     this.coins.clear();
+    this.s.game.scene.remove(this.inst, this.glow);
+    this.inst.dispose();
+    this.glow.geometry.dispose();
+    this.glow.material.dispose();
   }
 }

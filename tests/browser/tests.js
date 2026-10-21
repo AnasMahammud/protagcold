@@ -279,7 +279,7 @@ suite('Rules (shared cases, parity with server)', async () => {
   for (const kase of cases) {
     test(kase.name, () => {
       const c = kase.create;
-      const st = R.createMatch({ mode: c.mode, players: c.players.map((p) => ({ id: p, name: p.toUpperCase() })), startIt: c.it, cfg, countdown: c.countdown });
+      const st = R.createMatch({ mode: c.mode, players: c.players.map((p) => ({ id: p, name: p.toUpperCase() })), startIt: c.it, cfg, countdown: c.countdown, zone: c.zone });
       kase.steps.forEach((step, i) => {
         const where = `step ${i} ${JSON.stringify(step)}`;
         if ('tick' in step) R.tick(st, step.tick);
@@ -302,6 +302,8 @@ suite('Rules (shared cases, parity with server)', async () => {
           if (step.expect && 'ok' in step.expect) expect(got === step.expect.ok, `${where}: collect=${got}`);
           return;
         }
+        if (step.zone) R.zoneTick(st, step.zone[0], step.zone[1], step.zone[2]);
+        if (step.join) R.addPlayer(st, step.join);
         if (step.leave) R.removePlayer(st, step.leave);
         if (step.protect) R.protect(st, step.protect);
         if (step.forceIt) R.forceIt(st, step.forceIt);
@@ -319,6 +321,12 @@ suite('Rules (shared cases, parity with server)', async () => {
         if (e.coins) for (const [id, n] of Object.entries(e.coins)) expect(st.players[id].coinsPicked === n, `${where}: coins ${id}`);
         if (e.dodges) for (const [id, n] of Object.entries(e.dodges)) expect(st.players[id].perfectDodges === n, `${where}: dodges ${id}`);
         if (e.boost) for (const [id, v] of Object.entries(e.boost)) near(Math.max(0, st.players[id].boostUntil - st.time), v, 0.01, `${where}: boost ${id}`);
+        if (e.potato) for (const [k, v] of Object.entries(e.potato)) near(st.potato[k], v, 0.01, `${where}: potato.${k}`);
+        if (e.storm) for (const [id, v] of Object.entries(e.storm)) near(st.players[id].stormTime, v, 0.01, `${where}: storm ${id}`);
+        if (e.zoneAt) {
+          const z = R.zoneAt(st, e.zoneAt.t);
+          for (const k of ['x', 'z', 'r']) near(z[k], e.zoneAt[k], 0.01, `${where}: zone.${k}`);
+        }
         if ('tagCount' in e) expect(st.tagCount === e.tagCount, `${where}: tagCount=${st.tagCount}`);
         if (e.ranking) expect(JSON.stringify(st.result.ranking.map((r) => r.id)) === JSON.stringify(e.ranking), `${where}: ranking=${st.result.ranking.map((r) => r.id)}`);
         if (e.coinAward) for (const [id, v] of Object.entries(e.coinAward)) expect(computeCoins(st.result, id, cfg.coins).coins === v, `${where}: coins ${id}=${computeCoins(st.result, id, cfg.coins).coins}`);
@@ -461,6 +469,134 @@ suite('Bots', () => {
   });
 });
 
+// --------------------------------------------------------------------------- zones, conveyors, water slides
+function zoneMap() {
+  return {
+    id: 'zones', bounds: [-50, -50, 50, 50], killY: -12, spawns: [[0, 0, 0]], pads: [],
+    solids: [
+      { b: [-60, -1, -60, 60, 0, 60], m: 'concrete' },
+      { b: [-3, 0, 27, 3, 5, 31], m: 'concrete' }, // slide start deck
+    ],
+    zones: [
+      { k: 'water', b: [-45, -0.3, -45, -15, 0.9, -15], s: 0.72 },
+      { k: 'conveyor', b: [15, -0.2, -5, 45, 0.5, 5], v: [3, 0] },
+    ],
+    rides: [{ pts: [[0, 5, 30], [0, 4.2, 34], [0, 2.5, 40], [0, 1, 46], [0, 0.6, 50]], r: 1.1, vmax: 14 }],
+  };
+}
+const zw = new CollisionWorld(zoneMap());
+const zctrl = (x, y, z) => {
+  const c = new CharacterController(zw, M);
+  c.teleport(x, y, z, 0);
+  return c;
+};
+/** Ride a slide from its entry until the rider lands; returns what happened. */
+function rideIt(w, r) {
+  const c = new CharacterController(w, M);
+  const e = r.pts[0];
+  c.teleport(e.x, e.y, e.z, 0);
+  let rode = false, ended = false, t = 0;
+  for (let i = 0; i < 60 * 30; i++) {
+    c.step(I(), DT);
+    t += DT;
+    if (c.state === MS.RIDE) rode = true;
+    if (hasEvent(c, 'ride_end')) ended = true;
+    c.events.length = 0;
+    if (ended && c.grounded) break;
+  }
+  return { c, rode, ended, t };
+}
+
+suite('Zones, conveyors & water slides', () => {
+  test('water slows you down to its speed factor', () => {
+    const dry = zctrl(-10, 0, 10);
+    const wet = zctrl(-40, 0, -30);
+    run(dry, 1.5, () => I(1, 0));
+    run(wet, 1.5, () => I(1, 0));
+    near(wet.horizontalSpeed / dry.horizontalSpeed, 0.72, 0.03, 'speed ratio in water');
+    expect(wet.zone && wet.zone.k === 'water', 'controller reports the water zone');
+  });
+  test('a conveyor carries you along (and an Overdrive event reverses it)', () => {
+    const c = zctrl(20, 0, 0);
+    run(c, 1, () => I());
+    near(c.pos.x, 23, 0.1, 'carried +x at 3 m/s');
+    zw.conveyorScale = -2;
+    run(c, 1, () => I());
+    zw.conveyorScale = 1;
+    near(c.pos.x, 17, 0.1, 'carried back at 6 m/s');
+  });
+  test('stepping onto a slide rides it end to end and shoots you out', () => {
+    const r = zw.rides[0];
+    const { c, rode, ended, t } = rideIt(zw, r);
+    expect(rode && ended, `rode ${rode}, ended ${ended}`);
+    expect(c.grounded && c.state !== MS.RIDE, 'landed after the ride');
+    expect(c.pos.z > 49, `came out at the end (${c.pos.z.toFixed(2)})`);
+    expect(t < r.len / 5 + 1.5, `ride took ${t.toFixed(2)} s for ${r.len.toFixed(1)} m`);
+    current.note = `${r.len.toFixed(1)} m in ${t.toFixed(2)} s`;
+  });
+  test('Slide Rush (rideScale) makes slides faster; abilities cannot interrupt a ride', () => {
+    const r = zw.rides[0];
+    const slow = rideIt(zw, r).t;
+    zw.rideScale = 1.5;
+    const fast = rideIt(zw, r).t;
+    zw.rideScale = 1;
+    expect(fast < slow, `faster (${fast.toFixed(2)} < ${slow.toFixed(2)} s)`);
+    const c = zctrl(0, 5, 30);
+    c.step(I(), DT);
+    expect(c.state === MS.RIDE, 'riding');
+    const y = c.pos.y;
+    c.rocket(20, 5);
+    c.step(I(), DT);
+    expect(c.state === MS.RIDE && c.pos.y <= y, 'rocket jump ignored mid-ride');
+  });
+  test('low gravity jumps higher; wet floors take longer to stop', () => {
+    const c = zctrl(0, 0, -10);
+    c.gravityScale = 0.45;
+    let maxY = 0;
+    run(c, 2.5, (t, i) => I(0, 0, { jumpPressed: i === 0, jumpHeld: true }), (cc) => { maxY = Math.max(maxY, cc.pos.y); });
+    expect(maxY > discreteApex() * 1.8, `apex ${maxY.toFixed(2)} vs ${discreteApex().toFixed(2)}`);
+    const stopDist = (traction) => {
+      const k = zctrl(-10, 0, 10);
+      k.traction = traction;
+      run(k, 1.2, () => I(1, 0));
+      const x = k.pos.x;
+      run(k, 2, () => I());
+      return k.pos.x - x;
+    };
+    const dry = stopDist(1), wet = stopDist(0.22);
+    expect(wet > dry * 2, `slides further when wet (${wet.toFixed(2)} vs ${dry.toFixed(2)} m)`);
+  });
+  for (const id of Object.keys(maps).filter((k) => maps[k].world.rides.length)) {
+    test(`${id}: every slide can be ridden end to end and lands somewhere safe`, () => {
+      const w = maps[id].world;
+      const [bx0, bz0, bx1, bz1] = w.bounds;
+      for (const r of w.rides) for (const scale of [1, 1.5]) {
+        w.rideScale = scale; // 1.5 = the Slide Rush event
+        const { c, rode, ended } = rideIt(w, r);
+        w.rideScale = 1;
+        const at = `slide ${r.id} x${scale} (${c.pos.x.toFixed(1)}, ${c.pos.y.toFixed(1)}, ${c.pos.z.toFixed(1)})`;
+        expect(rode && ended && c.grounded, `${at}: rode ${rode}, ended ${ended}, grounded ${c.grounded}`);
+        expect(c.pos.y < r.pts[0].y - 2 && c.pos.y > w.killY, `${at}: came down`);
+        expect(c.pos.x > bx0 && c.pos.x < bx1 && c.pos.z > bz0 && c.pos.z < bz1, `${at}: inside the map`);
+        expect(!insideSolid(w, c), `${at}: not inside a wall`);
+      }
+      const links = navFor(id).nodes.reduce((n, a) => n + a.links.filter((l) => l.type === LINK.RIDE).length, 0);
+      expect(links === w.rides.length, `bots know every slide (${links}/${w.rides.length} ride links)`);
+      current.note = `${w.rides.length} slides`;
+    });
+  }
+  test('factory: the conveyor belts carry you', () => {
+    const w = maps.factory.world;
+    const zn = w.zones.find((z) => z.k === 'conveyor' && z.vx > 0 && z.y0 < 1.2);
+    const c = new CharacterController(w, M);
+    const x = zn.x0 + 3, z = (zn.z0 + zn.z1) / 2;
+    const g = w.groundBelow(x, z, 0.2, 5);
+    c.teleport(x, g.y, z, 0);
+    run(c, 1, () => I());
+    near(c.pos.x - x, zn.vx, 0.15, 'moved one second of belt');
+  });
+});
+
 // --------------------------------------------------------------------------- headless matches
 const { LocalMatch } = await import('../../src/gameplay/localMatch.js');
 function stubGame(id) {
@@ -481,6 +617,9 @@ suite('Full headless matches (8 bots, real rules)', () => {
     ['arena', 'infection'],
     ['docks', 'elimination'],
     ['training', 'classic'],
+    ['mall', 'hotpotato'],
+    ['waterpark', 'zone'],
+    ['factory', 'classic'],
   ];
   for (const [id, mode] of plans) {
     test(`${mode} on ${id} plays to a correct finish`, () => {
@@ -488,7 +627,7 @@ suite('Full headless matches (8 bots, real rules)', () => {
       const m = new LocalMatch(game, { mode, mapId: id, bots: 8, difficulty: 'normal', headless: true, seed: 42 }, game.map.nav);
       m.setup();
       const zero = I();
-      const limit = (cfg.modes[mode].duration + cfg.match.countdown + 2) / DT;
+      const limit = ((cfg.modes[mode].duration || 400) + cfg.match.countdown + 2) / DT; // hot potato has no clock
       let steps = 0;
       while (!m.ended && steps < limit) {
         m.simStep(DT, zero);
@@ -500,6 +639,15 @@ suite('Full headless matches (8 bots, real rules)', () => {
       expect(r.result.winners.length >= 1, 'has a winner');
       if (mode === 'classic') expect(r.tagCount >= 3, `bots tagged each other (${r.tagCount} tags)`);
       if (mode === 'elimination') expect(r.result.ranking.filter((x) => x.out).length >= 1, 'someone was eliminated');
+      if (mode === 'hotpotato') {
+        expect(r.result.winners.length === 1 && r.result.ranking.filter((x) => x.out).length === 7, 'potato exploded until one was left');
+        expect(r.potato.round >= 7 && r.potato.max <= cfg.modes.hotpotato.fuse, `fuse got shorter each round (${r.potato.max} s)`);
+      }
+      if (mode === 'zone') {
+        const z = R.zoneAt(r);
+        expect(z.r < R.zoneAt(r, 0).r, 'the ring closed in');
+        expect(r.result.ranking.filter((x) => x.out).length >= 1, 'someone was knocked out');
+      }
       current.note = `${r.result.reason}, ${r.tagCount} tags in ${r.time.toFixed(0)} s, winners: ${r.result.winners.join(', ')}`;
       m.dispose();
     });
@@ -794,6 +942,90 @@ suite('Abilities & coins', () => {
 });
 
 // --------------------------------------------------------------------------- settings & UI
+// --------------------------------------------------------------------------- map events & versions
+const { EventScheduler, eventMods, eventsForMap, EVENT_INFO } = await import('../../src/gameplay/mapEvents.js');
+const { VERSION, CHANGELOG } = await import('../../src/core/version.js');
+
+suite('Map events & updates', () => {
+  test('scheduler: warning first, sensible gaps, no repeats in a row, nothing right before the end', () => {
+    let s = 7;
+    const rng = () => ((s = (s * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+    const me = cfg.mapEvents;
+    const sch = new EventScheduler(me, ['blackout', 'coinrain', 'lowgrav', 'fog'], rng);
+    const evs = [];
+    let prev = null, starts = 0;
+    const step = 0.05, dur = 300;
+    for (let i = 0; i <= dur / step; i++) {
+      const t = i * step;
+      const { ev, started } = sch.step(t, dur);
+      if (ev && ev !== prev) evs.push({ ev, seenAt: t });
+      if (started) {
+        starts++;
+        expect(t >= ev.start && t - ev.start < step + 1e-9, `starts on time (${t} vs ${ev.start})`);
+      }
+      prev = ev;
+    }
+    expect(evs.length >= 3, `${evs.length} events in 5 minutes`);
+    expect(starts === evs.length, 'every event fires once');
+    const first = evs[0].ev;
+    expect(first.start >= me.firstAt[0] && first.start <= me.firstAt[1], `first event at ${first.start.toFixed(1)} s`);
+    evs.forEach(({ ev, seenAt }, i) => {
+      near(ev.start - seenAt, me.warn, step + 1e-6, `event ${i} warned ahead`);
+      near(ev.end - ev.start, me.events[ev.kind].duration, 1e-9, `event ${i} duration`);
+      expect(ev.start + 12 <= dur, `event ${i} not right before the end`);
+      if (i) {
+        const p = evs[i - 1].ev;
+        expect(ev.kind !== p.kind, `event ${i} repeats ${ev.kind}`);
+        const gap = ev.start - p.end;
+        expect(gap >= me.gap[0] - 1e-9 && gap <= me.gap[1] + step + 1e-6, `gap ${gap.toFixed(1)} s`);
+      }
+    });
+    current.note = evs.map((e) => `${e.ev.kind}@${e.ev.start.toFixed(0)}s`).join(', ');
+  });
+  test('event effects only apply while the event is on', () => {
+    const ev = (kind) => ({ kind, start: 10, end: 20 });
+    const neutral = eventMods(ev('lowgrav'), 9.9);
+    expect(neutral.kind === null && neutral.gravity === 1 && neutral.traction === 1 && neutral.speed === 1 && neutral.radar, 'nothing before it starts');
+    expect(eventMods(ev('lowgrav'), 20).gravity === 1, 'nothing after it ends');
+    expect(eventMods(ev('lowgrav'), 15).gravity < 0.6, 'low gravity');
+    expect(eventMods(ev('slick'), 15).traction < 0.5, 'wet floors');
+    expect(eventMods(ev('surge'), 15).speed > 1.1, 'speed surge');
+    const dark = eventMods(ev('blackout'), 15);
+    expect(dark.dark && !dark.radar, 'power outage: dark, no radar');
+    expect(eventMods(null, 15).kind === null, 'no event');
+  });
+  test('every map lists known events (and the indoor maps can lose power)', () => {
+    for (const { id } of mapIndex) {
+      const kinds = eventsForMap(maps[id].data);
+      expect(kinds.length >= 2, `${id}: ${kinds.length} events`);
+      for (const k of kinds) expect(EVENT_INFO[k] && cfg.mapEvents.events[k]?.duration > 0, `${id}: unknown event ${k}`);
+    }
+    for (const id of ['mall', 'factory']) expect(eventsForMap(maps[id].data).includes('blackout'), `${id} has power outages`);
+    expect(eventsForMap(maps.factory.data).includes('overdrive') && eventsForMap(maps.waterpark.data).includes('sliderush'), 'map-specific events');
+  });
+  test('coin rain drops bonus coins that do not respawn', () => {
+    const { m, runP } = liveMatch(3);
+    const before = m.coins.coins.size;
+    m.coins.rain(5);
+    expect(m.coins.coins.size === before + 5, `rained ${m.coins.coins.size - before}`);
+    const c = [...m.coins.coins.values()].find((k) => k.bonus);
+    const queued = m.coins.respawns.length;
+    runP.spawn(c.pos.x, c.pos.y - 0.9, c.pos.z, 0);
+    m.coins.step(DT);
+    expect(!m.coins.coins.has(c.id) && m.rules.players[runP.id].coinsPicked === 1, 'picked up');
+    expect(m.coins.respawns.length === queued, 'no respawn queued for a bonus coin');
+    m.dispose();
+  });
+  test('version: config, game and changelog agree', () => {
+    expect(VERSION === cfg.version, `version.js ${VERSION} vs config ${cfg.version}`);
+    expect(CHANGELOG[0].version === VERSION, 'newest changelog entry is this version');
+    const nums = CHANGELOG.map((u) => parseFloat(u.version));
+    expect(nums.every((v, i) => !i || v < nums[i - 1]), 'changelog newest first');
+    for (const u of CHANGELOG) expect(u.title && u.date && u.sections.length && u.sections.every(([t, items]) => t && items.length), `entry ${u.version} complete`);
+    current.note = `v${VERSION}`;
+  });
+});
+
 suite('Settings & UI wiring', () => {
   test('settings persist to storage and survive a reload', async () => {
     const { settings } = await import('../../src/core/settings.js');

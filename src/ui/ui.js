@@ -16,13 +16,14 @@ import { CharacterPreview } from './preview.js';
 import { friends } from '../multiplayer/friends.js';
 import { ABILITY_IDS, ABILITY_INFO } from '../gameplay/abilities.js';
 import { abilityIcon, COIN_SVG } from './abilityIcons.js';
+import { VERSION, CHANGELOG } from '../core/version.js';
 
 const MODE_INFO = () => {
   const m = getConfig().modes;
-  return ['classic', 'infection', 'elimination'].map((id) => ({ id, name: m[id].name, desc: m[id].short, duration: m[id].duration }));
+  return ONLINE_MODE_IDS.map((id) => ({ id, name: m[id].name, desc: m[id].short, duration: m[id].duration }));
 };
-const ATTRACT_MAPS = ['rooftops', 'docks', 'arena'];
-const VERSION = '1.0.0';
+const ONLINE_MODE_IDS = ['classic', 'infection', 'elimination', 'hotpotato', 'zone'];
+const ATTRACT_MAPS = ['rooftops', 'docks', 'arena', 'mall', 'waterpark', 'factory'];
 
 export class UI {
   constructor({ game, input, net, touch }) {
@@ -145,6 +146,8 @@ export class UI {
       return;
     }
     this.show('main');
+    // first launch of a new version: show what changed (once)
+    if (loadJSON('lastSeenVersion', null) !== VERSION) this.show('updates');
     // Stay connected in the background (when served by the game server) so friends can see
     // you online and invite you. Failure is silent: offline play never needs the server.
     if (location.protocol.startsWith('http')) {
@@ -197,7 +200,7 @@ export class UI {
         m.dispose();
       }
     } catch (err) {
-      console.error('[ui] attract mode failed', err);
+      if (!err.superseded) console.error('[ui] attract mode failed', err);
     } finally {
       this.attractBusy = false;
     }
@@ -353,7 +356,7 @@ export class UI {
     const s = this.game.session;
     if (this.inMatch && s && !s.attract) {
       const hs = s.hudState();
-      this.hud.update(hs, { fps: this.game.fps, showLockHint: !this.paused && !this.touch.enabled && !this.input.pointerLocked && !s.ended && this.current === null });
+      this.hud.update(hs, { fps: this.game.fps, resScale: this.game.dynScale, showLockHint: !this.paused && !this.touch.enabled && !this.input.pointerLocked && !s.ended && this.current === null });
       if (this.touch.enabled) this.touch.setCooldowns(hs.abilities);
       const rv = s.rulesView();
       if (rv.timeLeft !== Infinity && rv.phase === 'playing') audio.setMusicIntensity(rv.timeLeft < 30 ? 1 : rv.timeLeft < 70 ? 0.8 : 0.6);
@@ -377,8 +380,9 @@ export class UI {
         return;
       }
       this.game.setSession(m);
-      this._enterMatch();
+      await this._enterMatch();
     } catch (err) {
+      if (err.superseded) return; // a newer start replaced this one
       console.error(err);
       this.inMatch = false;
       this.toast(`Could not start match: ${err.message}`, 'error');
@@ -399,8 +403,9 @@ export class UI {
         return;
       }
       this.game.setSession(m);
+      await this._enterMatch();
+      // only now: the server starts the countdown once everyone is really ready to play
       this.net.send('loaded', { matchId: msg.matchId, loadout: progression.loadout });
-      this._enterMatch();
     } catch (err) {
       console.error(err);
       this.inMatch = false;
@@ -409,8 +414,16 @@ export class UI {
     }
   }
 
-  _enterMatch() {
-    this.game.prewarmEffects();
+  async _enterMatch() {
+    const s = this.game.session;
+    if (this.current !== 'loading') this.loading('Getting ready…');
+    else this.root.querySelector('.label').textContent = 'Getting ready…';
+    // offline: hold the countdown while shaders compile behind the loading screen
+    const offline = !this.inMatchOnline;
+    if (offline && s) s.paused = true;
+    await this.game.prewarmEffects();
+    if (s !== this.game.session || !this.inMatch) return; // left (or restarted) meanwhile
+    if (offline && s) s.paused = false;
     this.hideScreens();
     this.stack = [];
     this.paused = false;
@@ -873,6 +886,10 @@ export class UI {
       this.show('customise', { replace: true });
     },
     previewMode: (t) => this.preview?.setMode(t.dataset.mode),
+    updatesSeen: () => {
+      saveJSON('lastSeenVersion', VERSION);
+      this.back();
+    },
     buyAbility: (t) => {
       const res = progression.buyAbility(t.dataset.id);
       if (res.ok) {
@@ -913,7 +930,7 @@ export class UI {
     return `
     <div class="screen menu-main">
       <h1 class="logo">Pro Tag<span>Chase · Evade · Tag</span></h1>
-      <p class="tagline">Fast parkour tag across neon rooftops, a stadium chase arena and a sunset dockyard. Vault, slide, wall-jump — and don't get caught.</p>
+      <p class="tagline">Fast parkour tag across neon rooftops, an overgrown mall, a giant waterpark, a toy factory and more. Vault, slide, wall-jump — and don't get caught.</p>
       <div class="menu-list">
         <button class="btn menu-item primary" data-action="play"><span class="t">▶&nbsp; Play</span></button>
         <button class="btn menu-item" data-action="practice"><span class="t">Practice</span></button>
@@ -923,6 +940,7 @@ export class UI {
         <button class="btn menu-item" data-action="goto" data-target="profile"><span class="t">Profile</span></button>
         <button class="btn menu-item" data-action="goto" data-target="settings"><span class="t">Settings</span></button>
         <button class="btn menu-item" data-action="goto" data-target="controls"><span class="t">Controls</span></button>
+        <button class="btn menu-item" data-action="goto" data-target="updates"><span class="t">What's new</span>${loadJSON('lastSeenVersion', null) !== VERSION ? '<span class="badge new-inline">NEW</span>' : `<span class="ver-chip">v${VERSION}</span>`}</button>
         <button class="btn menu-item" data-action="goto" data-target="credits"><span class="t">Credits</span></button>
       </div>
       <div class="player-card panel">
@@ -954,7 +972,7 @@ export class UI {
           <div class="panel">
             <div class="label">Game mode</div>
             <div class="cards" style="margin:10px 0 18px">
-              ${modes.map((m) => `<button class="card ${o.mode === m.id ? 'selected' : ''}" data-action="selectOffline" data-key="mode" data-value="${m.id}"><div class="name">${m.name}</div><div class="desc">${m.desc}</div><div class="desc">${Math.round(m.duration / 60)} min</div></button>`).join('')}
+              ${modes.map((m) => `<button class="card ${o.mode === m.id ? 'selected' : ''}" data-action="selectOffline" data-key="mode" data-value="${m.id}"><div class="name">${m.name}</div><div class="desc">${m.desc}</div><div class="desc">${m.duration ? `${Math.round(m.duration / 60)} min` : 'No clock'}</div>${['hotpotato', 'zone'].includes(m.id) ? '<span class="badge new">NEW</span>' : ''}</button>`).join('')}
             </div>
             <div class="label">Arena</div>
             <div class="cards" style="margin:10px 0 18px">
@@ -1089,7 +1107,7 @@ export class UI {
           <div class="stack">
             <div class="panel">
               <div class="label">Mode</div>
-              <div class="seg" style="margin:8px 0 10px">${['classic', 'infection', 'elimination'].map((m) => `<button class="${room.mode === m ? 'on' : ''}" ${isHost ? `data-action="hostSet" data-key="mode" data-value="${m}"` : 'disabled'}>${cfg.modes[m].name}</button>`).join('')}</div>
+              <div class="seg" style="margin:8px 0 10px">${ONLINE_MODE_IDS.map((m) => `<button class="${room.mode === m ? 'on' : ''}" ${isHost ? `data-action="hostSet" data-key="mode" data-value="${m}"` : 'disabled'}>${cfg.modes[m].name}</button>`).join('')}</div>
               <div class="desc" style="color:var(--muted);font-size:13px;margin-bottom:12px">${esc(cfg.modes[room.mode]?.short || '')}</div>
               <div class="label">Arena</div>
               <div class="seg" style="margin:8px 0 12px">${this.maps.map((m) => `<button class="${room.map === m.id ? 'on' : ''}" ${isHost ? `data-action="hostSet" data-key="map" data-value="${m.id}"` : 'disabled'}>${esc(m.name)}</button>`).join('')}</div>
@@ -1278,11 +1296,13 @@ export class UI {
     const winnersNames = r.ranking.filter((x) => x.winner).map((x) => x.name);
     let headline = won ? 'Victory!' : 'Defeat';
     if (r.mode === 'infection') headline = r.team === 'runners' ? (won ? 'You survived!' : 'Runners win') : won ? 'Infection wins!' : 'You were infected';
+    if (r.mode === 'hotpotato') headline = won ? 'Last one standing!' : me?.out ? 'You exploded' : 'Defeat';
     const p = progression.profile;
     const need = xpForLevel(p.level, getConfig().progression);
-    const cols = r.mode === 'classic' ? ['Tags', 'Time as IT', 'Survived'] : r.mode === 'infection' ? ['Tags', 'Survived', 'Status'] : ['Eliminations', 'Survived', 'Status'];
+    const cols = r.mode === 'classic' ? ['Tags', 'Time as IT', 'Survived'] : r.mode === 'infection' ? ['Tags', 'Survived', 'Status'] : r.mode === 'hotpotato' ? ['Passes', 'Held the potato', 'Status'] : ['Eliminations', 'Survived', 'Status'];
     const rowCells = (x) => {
       if (r.mode === 'classic') return `<td>${x.tags}</td><td>${formatSeconds(x.itTime)}</td><td>${formatSeconds(x.survival)}</td>`;
+      if (r.mode === 'hotpotato') return `<td>${x.tags}</td><td>${formatSeconds(x.itTime)}</td><td>${x.out ? 'Exploded' : 'Survived'}</td>`;
       const status = x.it ? (r.mode === 'infection' ? 'Infected' : 'Hunter') : x.out ? 'Eliminated' : 'Survived';
       return `<td>${x.tags}</td><td>${formatSeconds(x.survival)}</td><td>${status}</td>`;
     };
@@ -1507,7 +1527,7 @@ export class UI {
     } else if (tab === 'camera') {
       body = slider('camera.fov', 'Field of view', 60, 105, 1) + slider('camera.distance', 'Camera distance', 2.5, 7, 0.1) + toggle('camera.sprintFov', 'Speed FOV effect', 'Widen the view slightly when sprinting and sliding') + toggle('camera.shake', 'Camera shake', 'Small shake when tagging or being tagged') + toggle('camera.landingDip', 'Landing camera dip');
     } else if (tab === 'graphics') {
-      body = seg('graphics.quality', 'Quality preset', [['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['ultra', 'Ultra']], 'Shadows, bloom, particle budget, draw distance, resolution') + slider('graphics.renderScale', 'Resolution scale', 0.5, 1.5, 0.05, 'Rendering resolution relative to your screen') + seg('graphics.fpsLimit', 'Frame-rate limit', [[0, 'Off'], [30, '30'], [60, '60'], [120, '120'], [144, '144']]) + toggle('graphics.showFps', 'Show FPS counter') + `<div class="setting"><div>Fullscreen<span class="hint">Currently ${document.fullscreenElement ? 'fullscreen' : 'windowed'}</span></div><button class="btn small" data-action="fullscreen" style="justify-self:end"><span class="t">${document.fullscreenElement ? 'Exit fullscreen' : 'Go fullscreen'}</span></button></div>` + `<div class="setting"><div>VSync<span class="hint">Browsers always synchronise rendering to the display. Use the frame-rate limit above to cap FPS.</span></div><div style="justify-self:end;color:var(--muted)">Always on</div></div>` + `<p class="subtitle">Real-time lights and decoration density apply when the next arena loads; anti-aliasing applies after reloading the page.</p>`;
+      body = seg('graphics.quality', 'Quality preset', [['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['ultra', 'Ultra']], 'Shadows, bloom, particle budget, draw distance, resolution') + slider('graphics.renderScale', 'Resolution scale', 0.5, 1.5, 0.05, 'Rendering resolution relative to your screen') + seg('graphics.fpsLimit', 'Frame-rate limit', [[0, 'Off'], [30, '30'], [60, '60'], [120, '120'], [144, '144']]) + toggle('graphics.dynamicRes', 'Dynamic resolution', 'When the graphics card is the bottleneck, briefly render fewer pixels instead of dropping frames') + toggle('graphics.showFps', 'Show FPS counter') + `<div class="setting"><div>Fullscreen<span class="hint">Currently ${document.fullscreenElement ? 'fullscreen' : 'windowed'}</span></div><button class="btn small" data-action="fullscreen" style="justify-self:end"><span class="t">${document.fullscreenElement ? 'Exit fullscreen' : 'Go fullscreen'}</span></button></div>` + `<div class="setting"><div>VSync<span class="hint">Browsers always synchronise rendering to the display. Use the frame-rate limit above to cap FPS.</span></div><div style="justify-self:end;color:var(--muted)">Always on</div></div>` + `<p class="subtitle">Real-time lights and decoration density apply when the next arena loads; anti-aliasing applies after reloading the page.</p>`;
     } else if (tab === 'access') {
       body = toggle('accessibility.reduceFlashing', 'Reduce flashing & shake', 'Disables screen flashes, danger vignette and camera shake') + toggle('accessibility.dodgeAssist', 'Perfect-dodge assist', 'Flashes NOW! inside the perfect-dodge window. Off = you time it from the shrinking ring alone') + slider('accessibility.hudScale', 'HUD scale', 0.75, 1.5, 0.05) + toggle('accessibility.largeText', 'Larger menu text') + `<p class="subtitle" style="margin-top:12px">The IT player is always shown with a shape (spinning crown-flame and ground ring), not just a colour, so it stays readable for colour-blind players.</p>`;
     } else if (tab === 'network') {
@@ -1578,6 +1598,27 @@ export class UI {
             <div class="cg"><span>Grapple</span><span>Aim the crosshair until it turns into a green ring</span></div>
           </div>
         </div>
+      </div>
+    </div>`;
+  }
+
+  screen_updates() {
+    saveJSON('lastSeenVersion', VERSION);
+    const [latest, ...older] = CHANGELOG;
+    const section = ([title, items]) => `<div class="cl-sec"><div class="label">${esc(title)}</div><ul>${items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul></div>`;
+    return `
+    <div class="screen center dim">
+      <button class="btn ghost small back-btn" data-action="back"><span class="t">← Back</span></button>
+      <div class="page panel changelog" style="max-width:860px">
+        <div class="row between cl-head">
+          <div><div class="label">Update</div><h2 class="title">${esc(latest.title)}</h2></div>
+          <div class="cl-version">v${esc(latest.version)}<span>${esc(latest.date)}</span></div>
+        </div>
+        <div class="cl-grid">${latest.sections.map(section).join('')}</div>
+        <div class="row end" style="margin-top:14px"><button class="btn primary" data-action="updatesSeen"><span class="t">Let's play!</span></button></div>
+        <div class="sep"></div>
+        <div class="label">Earlier updates</div>
+        ${older.map((u) => `<details class="cl-old"><summary><b>v${esc(u.version)}</b> · ${esc(u.title)} <span>${esc(u.date)}</span></summary>${u.sections.map(section).join('')}</details>`).join('')}
       </div>
     </div>`;
   }
