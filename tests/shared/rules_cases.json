@@ -1,0 +1,923 @@
+{
+  "_comment": "Executed by BOTH tests/test_rules.py (server rules) and tests/browser (client rules). Timings come from config/game.json: cooldown 1.2, newItFreeze 1.0, noTagBackTime 2.5, spawnProtection 3.0, classic 180 s, infection 150 s.",
+  "cases": [
+    {
+      "name": "classic: a valid tag transfers IT exactly once; freeze, cooldown and no-tagback are enforced",
+      "create": {
+        "mode": "classic",
+        "players": [
+          "a",
+          "b",
+          "c"
+        ],
+        "it": [
+          "a"
+        ],
+        "countdown": 0
+      },
+      "steps": [
+        {
+          "tick": 2.0
+        },
+        {
+          "tag": [
+            "a",
+            "b"
+          ],
+          "expect": {
+            "ok": true
+          }
+        },
+        {
+          "expect": {
+            "it": [
+              "b"
+            ],
+            "tags": {
+              "a": 1,
+              "b": 0
+            }
+          }
+        },
+        {
+          "tag": [
+            "a",
+            "b"
+          ],
+          "expect": {
+            "ok": false,
+            "reason": "not_it"
+          }
+        },
+        {
+          "tag": [
+            "b",
+            "c"
+          ],
+          "expect": {
+            "ok": false,
+            "reason": "frozen"
+          }
+        },
+        {
+          "tick": 1.1
+        },
+        {
+          "tag": [
+            "b",
+            "c"
+          ],
+          "expect": {
+            "ok": false,
+            "reason": "cooldown"
+          }
+        },
+        {
+          "tick": 0.2
+        },
+        {
+          "tag": [
+            "b",
+            "a"
+          ],
+          "expect": {
+            "ok": false,
+            "reason": "no_tagback"
+          }
+        },
+        {
+          "tag": [
+            "b",
+            "c"
+          ],
+          "expect": {
+            "ok": true
+          }
+        },
+        {
+          "expect": {
+            "it": [
+              "c"
+            ],
+            "tags": {
+              "a": 1,
+              "b": 1,
+              "c": 0
+            },
+            "phase": "playing"
+          }
+        }
+      ]
+    },
+    {
+      "name": "countdown: tags are rejected until the match starts",
+      "create": {
+        "mode": "classic",
+        "players": [
+          "a",
+          "b"
+        ],
+        "it": [
+          "a"
+        ],
+        "countdown": 3
+      },
+      "steps": [
+        {
+          "tag": [
+            "a",
+            "b"
+          ],
+          "expect": {
+            "ok": false,
+            "reason": "phase"
+          }
+        },
+        {
+          "tick": 1.5
+        },
+        {
+          "expect": {
+            "phase": "countdown"
+          }
+        },
+        {
+          "tick": 1.6
+        },
+        {
+          "expect": {
+            "phase": "playing"
+          }
+        },
+        {
+          "tick": 0.5
+        },
+        {
+          "tag": [
+            "a",
+            "b"
+          ],
+          "expect": {
+            "ok": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "invalid tags: self, unknown player, IT target",
+      "create": {
+        "mode": "infection",
+        "players": [
+          "a",
+          "b",
+          "c"
+        ],
+        "it": [
+          "a"
+        ],
+        "countdown": 0
+      },
+      "steps": [
+        {
+          "tick": 1.0
+        },
+        {
+          "tag": [
+            "a",
+            "a"
+          ],
+          "expect": {
+            "ok": false,
+            "reason": "self"
+          }
+        },
+        {
+          "tag": [
+            "a",
+            "zz"
+          ],
+          "expect": {
+            "ok": false,
+            "reason": "invalid"
+          }
+        },
+        {
+          "tag": [
+            "b",
+            "c"
+          ],
+          "expect": {
+            "ok": false,
+            "reason": "not_it"
+          }
+        },
+        {
+          "tag": [
+            "a",
+            "b"
+          ],
+          "expect": {
+            "ok": true
+          }
+        },
+        {
+          "tick": 2.0
+        },
+        {
+          "tag": [
+            "a",
+            "b"
+          ],
+          "expect": {
+            "ok": false,
+            "reason": "target_it"
+          }
+        }
+      ]
+    },
+    {
+      "name": "classic: timer expiry ends the match; least time as IT wins; XP formula",
+      "create": {
+        "mode": "classic",
+        "players": [
+          "a",
+          "b",
+          "c"
+        ],
+        "it": [
+          "a"
+        ],
+        "countdown": 0
+      },
+      "steps": [
+        {
+          "tick": 10.0
+        },
+        {
+          "tag": [
+            "a",
+            "b"
+          ],
+          "expect": {
+            "ok": true
+          }
+        },
+        {
+          "tick": 85.0
+        },
+        {
+          "tick": 85.0
+        },
+        {
+          "expect": {
+            "phase": "ended",
+            "endReason": "time",
+            "winners": [
+              "c"
+            ],
+            "itTime": {
+              "a": 10,
+              "b": 170,
+              "c": 0
+            }
+          }
+        },
+        {
+          "expect": {
+            "xp": {
+              "c": 230,
+              "a": 140,
+              "b": 45
+            }
+          }
+        },
+        {
+          "tag": [
+            "b",
+            "c"
+          ],
+          "expect": {
+            "ok": false,
+            "reason": "phase"
+          }
+        }
+      ]
+    },
+    {
+      "name": "infection: everyone infected ends the match early",
+      "create": {
+        "mode": "infection",
+        "players": [
+          "a",
+          "b",
+          "c"
+        ],
+        "it": [
+          "a"
+        ],
+        "countdown": 0
+      },
+      "steps": [
+        {
+          "tick": 1.0
+        },
+        {
+          "tag": [
+            "a",
+            "b"
+          ],
+          "expect": {
+            "ok": true
+          }
+        },
+        {
+          "expect": {
+            "it": [
+              "a",
+              "b"
+            ],
+            "phase": "playing"
+          }
+        },
+        {
+          "tick": 1.3
+        },
+        {
+          "tag": [
+            "b",
+            "c"
+          ],
+          "expect": {
+            "ok": true
+          }
+        },
+        {
+          "expect": {
+            "phase": "ended",
+            "endReason": "all_infected",
+            "team": "infected",
+            "winners": [
+              "a",
+              "b",
+              "c"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "infection: a survivor at the buzzer wins for the runners",
+      "create": {
+        "mode": "infection",
+        "players": [
+          "a",
+          "b",
+          "c"
+        ],
+        "it": [
+          "a"
+        ],
+        "countdown": 0
+      },
+      "steps": [
+        {
+          "tick": 5.0
+        },
+        {
+          "tag": [
+            "a",
+            "b"
+          ],
+          "expect": {
+            "ok": true
+          }
+        },
+        {
+          "tick": 145.0
+        },
+        {
+          "expect": {
+            "phase": "ended",
+            "endReason": "time",
+            "team": "runners",
+            "winners": [
+              "c"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "elimination: tagged runners are out; last runner standing wins",
+      "create": {
+        "mode": "elimination",
+        "players": [
+          "a",
+          "b",
+          "c",
+          "d"
+        ],
+        "it": [
+          "a"
+        ],
+        "countdown": 0
+      },
+      "steps": [
+        {
+          "tick": 1.0
+        },
+        {
+          "tag": [
+            "a",
+            "b"
+          ],
+          "expect": {
+            "ok": true
+          }
+        },
+        {
+          "expect": {
+            "out": [
+              "b"
+            ],
+            "it": [
+              "a"
+            ]
+          }
+        },
+        {
+          "tag": [
+            "a",
+            "b"
+          ],
+          "expect": {
+            "ok": false,
+            "reason": "target_out"
+          }
+        },
+        {
+          "tick": 1.3
+        },
+        {
+          "tag": [
+            "a",
+            "c"
+          ],
+          "expect": {
+            "ok": true
+          }
+        },
+        {
+          "expect": {
+            "phase": "ended",
+            "endReason": "last_runner",
+            "team": "runners",
+            "winners": [
+              "d"
+            ],
+            "out": [
+              "b",
+              "c"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "elimination: the hunter wins if every runner is caught",
+      "create": {
+        "mode": "elimination",
+        "players": [
+          "a",
+          "b"
+        ],
+        "it": [
+          "a"
+        ],
+        "countdown": 0
+      },
+      "steps": [
+        {
+          "tick": 1.0
+        },
+        {
+          "tag": [
+            "a",
+            "b"
+          ],
+          "expect": {
+            "ok": true
+          }
+        },
+        {
+          "expect": {
+            "phase": "ended",
+            "endReason": "all_out",
+            "team": "hunters",
+            "winners": [
+              "a"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "disconnect: if IT leaves, IT passes to the next player; too few players ends the match",
+      "create": {
+        "mode": "classic",
+        "players": [
+          "a",
+          "b",
+          "c"
+        ],
+        "it": [
+          "a"
+        ],
+        "countdown": 0
+      },
+      "steps": [
+        {
+          "tick": 4.0
+        },
+        {
+          "leave": "a"
+        },
+        {
+          "expect": {
+            "it": [
+              "b"
+            ],
+            "phase": "playing"
+          }
+        },
+        {
+          "tag": [
+            "b",
+            "c"
+          ],
+          "expect": {
+            "ok": false,
+            "reason": "frozen"
+          }
+        },
+        {
+          "leave": "c"
+        },
+        {
+          "expect": {
+            "phase": "ended",
+            "endReason": "players"
+          }
+        }
+      ]
+    },
+    {
+      "name": "spawn protection blocks tags until it expires",
+      "create": {
+        "mode": "classic",
+        "players": [
+          "a",
+          "b"
+        ],
+        "it": [
+          "a"
+        ],
+        "countdown": 0
+      },
+      "steps": [
+        {
+          "tick": 2.0
+        },
+        {
+          "protect": "b"
+        },
+        {
+          "tag": [
+            "a",
+            "b"
+          ],
+          "expect": {
+            "ok": false,
+            "reason": "protected"
+          }
+        },
+        {
+          "tick": 3.1
+        },
+        {
+          "tag": [
+            "a",
+            "b"
+          ],
+          "expect": {
+            "ok": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "practice: never ends, IT can be swapped on demand",
+      "create": {
+        "mode": "practice",
+        "players": [
+          "a",
+          "b"
+        ],
+        "it": [
+          "b"
+        ],
+        "countdown": 0
+      },
+      "steps": [
+        {
+          "tick": 500.0
+        },
+        {
+          "expect": {
+            "phase": "playing",
+            "it": [
+              "b"
+            ]
+          }
+        },
+        {
+          "forceIt": "a"
+        },
+        {
+          "expect": {
+            "it": [
+              "a"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "duplicate tag events are processed once",
+      "create": {
+        "mode": "infection",
+        "players": [
+          "a",
+          "b",
+          "c"
+        ],
+        "it": [
+          "a"
+        ],
+        "countdown": 0
+      },
+      "steps": [
+        {
+          "tick": 1.0
+        },
+        {
+          "tag": [
+            "a",
+            "b"
+          ],
+          "expect": {
+            "ok": true
+          }
+        },
+        {
+          "tag": [
+            "a",
+            "b"
+          ],
+          "expect": {
+            "ok": false,
+            "reason": "target_it"
+          }
+        },
+        {
+          "expect": {
+            "tags": {
+              "a": 1
+            },
+            "tagCount": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "results: players who disconnect are ranked last",
+      "create": {
+        "mode": "classic",
+        "players": [
+          "a",
+          "b",
+          "c"
+        ],
+        "it": [
+          "a"
+        ],
+        "countdown": 0
+      },
+      "steps": [
+        {
+          "tick": 30.0
+        },
+        {
+          "tag": [
+            "a",
+            "b"
+          ],
+          "expect": {
+            "ok": true
+          }
+        },
+        {
+          "tick": 20.0
+        },
+        {
+          "leave": "c"
+        },
+        {
+          "tick": 130.0
+        },
+        {
+          "expect": {
+            "phase": "ended",
+            "endReason": "time",
+            "winners": [
+              "a"
+            ],
+            "ranking": [
+              "a",
+              "b",
+              "c"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "perfect dodge: a legal tag is evaded, the tagger is stunned, the dodger boosted and protected",
+      "create": {
+        "mode": "classic",
+        "players": [
+          "a",
+          "b",
+          "c"
+        ],
+        "it": [
+          "a"
+        ],
+        "countdown": 0
+      },
+      "steps": [
+        {
+          "tick": 2.0
+        },
+        {
+          "perfectDodge": [
+            "a",
+            "b"
+          ],
+          "opts": {
+            "delay": 0.5,
+            "stun": 1.0,
+            "boost": 5.0,
+            "protect": 2.5
+          },
+          "expect": {
+            "ok": true
+          }
+        },
+        {
+          "expect": {
+            "it": [
+              "a"
+            ],
+            "tags": {
+              "a": 0
+            },
+            "dodges": {
+              "b": 1
+            },
+            "tagCount": 0
+          }
+        },
+        {
+          "tag": [
+            "a",
+            "c"
+          ],
+          "expect": {
+            "ok": false,
+            "reason": "frozen"
+          }
+        },
+        {
+          "tick": 1.4
+        },
+        {
+          "tag": [
+            "a",
+            "c"
+          ],
+          "expect": {
+            "ok": false,
+            "reason": "frozen"
+          }
+        },
+        {
+          "tick": 0.2
+        },
+        {
+          "tag": [
+            "a",
+            "b"
+          ],
+          "expect": {
+            "ok": false,
+            "reason": "protected"
+          }
+        },
+        {
+          "expect": {
+            "boost": {
+              "b": 3.9,
+              "c": 0
+            }
+          }
+        },
+        {
+          "tag": [
+            "a",
+            "c"
+          ],
+          "expect": {
+            "ok": true
+          }
+        },
+        {
+          "perfectDodge": [
+            "a",
+            "b"
+          ],
+          "expect": {
+            "ok": false,
+            "reason": "not_it"
+          }
+        }
+      ]
+    },
+    {
+      "name": "perfect dodge: cannot be triggered by an illegal tag (cooldown, phase)",
+      "create": {
+        "mode": "infection",
+        "players": [
+          "a",
+          "b",
+          "c"
+        ],
+        "it": [
+          "a"
+        ],
+        "countdown": 2
+      },
+      "steps": [
+        {
+          "perfectDodge": [
+            "a",
+            "b"
+          ],
+          "expect": {
+            "ok": false,
+            "reason": "phase"
+          }
+        },
+        {
+          "tick": 3.0
+        },
+        {
+          "tag": [
+            "a",
+            "b"
+          ],
+          "expect": {
+            "ok": true
+          }
+        },
+        {
+          "perfectDodge": [
+            "a",
+            "c"
+          ],
+          "expect": {
+            "ok": false,
+            "reason": "cooldown"
+          }
+        },
+        {
+          "expect": {
+            "dodges": {
+              "c": 0
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

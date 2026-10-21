@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.vscode/*
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.DS_Store
+Thumbs.db
+tools/bin/
+.claude/
+tools/publish.json

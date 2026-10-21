@@ -1,0 +1,14 @@
+# Render "Blueprint": a permanent public PRO TAG server on Render's free plan.
+# Render dashboard -> New -> Blueprint -> pick your GitHub repo containing this project.
+# The server reads $PORT and $RENDER_EXTERNAL_URL automatically (see server/main.py).
+services:
+  - type: web
+    name: pro-tag
+    runtime: python
+    plan: free
+    buildCommand: python --version
+    startCommand: python server/main.py --host 0.0.0.0
+    healthCheckPath: /healthz
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7

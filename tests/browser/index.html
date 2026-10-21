@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>PRO TAG tests</title>
+  <script type="importmap">{ "imports": { "three": "../../vendor/three/three.module.js" } }</script>
+  <style>
+    body { font: 14px/1.5 'Segoe UI', system-ui, sans-serif; background: #0b0f1a; color: #e6ecf7; margin: 24px; }
+    h1 { margin: 0 0 6px; }
+    .sum { font-size: 18px; font-weight: 700; margin: 10px 0 18px; }
+    .pass { color: #7dff6b; } .fail { color: #ff5a4f; } .skip { color: #ffd23d; }
+    .suite { margin-top: 16px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; color: #3df5ff; }
+    .t { padding: 2px 0 2px 12px; } .t small { color: #8b97ad; }
+    pre { background: #151b2b; padding: 8px; border-radius: 6px; white-space: pre-wrap; color: #ffb3ad; }
+  </style>
+</head>
+<body>
+  <h1>PRO TAG — automated browser tests</h1>
+  <div>Movement, collision, rules (shared with the server), maps, navigation, bots, full headless matches, settings, UI wiring.</div>
+  <div class="sum" id="sum">Running…</div>
+  <div id="out"></div>
+  <script type="module" src="./tests.js"></script>
+</body>
+</html>

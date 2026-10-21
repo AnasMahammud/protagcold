@@ -1,0 +1,44 @@
+{
+  "maps": [
+    {
+      "id": "rooftops",
+      "name": "Neon Rooftops",
+      "theme": "city",
+      "description": "A rooftop playground high above a neon city. Low alleys, high bridges, and a central water tower.",
+      "size": [
+        80,
+        80
+      ]
+    },
+    {
+      "id": "arena",
+      "name": "Pulse Arena",
+      "theme": "arena",
+      "description": "An indoor chase-tag stadium. A dense obstacle quad in the middle, catwalks above, wall-jump chimneys.",
+      "size": [
+        44,
+        44
+      ]
+    },
+    {
+      "id": "docks",
+      "name": "Sunset Dockyard",
+      "theme": "docks",
+      "description": "A container port at golden hour. Stack-hop the containers, cut through the warehouse, ride the cargo launchers.",
+      "size": [
+        88,
+        68
+      ]
+    },
+    {
+      "id": "training",
+      "name": "Training Ground",
+      "theme": "training",
+      "description": "A clean practice facility with a labelled station for every movement skill.",
+      "size": [
+        60,
+        44
+      ]
+    }
+  ]
+}

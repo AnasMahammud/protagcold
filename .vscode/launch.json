@@ -1,0 +1,13 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "PRO TAG server (debug)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/server/main.py",
+      "args": ["--verbose"],
+      "console": "integratedTerminal"
+    }
+  ]
+}

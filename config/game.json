@@ -1,0 +1,144 @@
+{
+  "_comment": "Shared gameplay configuration. Read by the browser client (src/core/config.js) AND the Python server (server/config.py). Change values here, not in code.",
+  "version": "1.0.0",
+
+  "tick": {
+    "simHz": 60,
+    "netSendHz": 20,
+    "serverTickHz": 30,
+    "interpDelayMs": 110
+  },
+
+  "movement": {
+    "gravity": 30.0,
+    "walkSpeed": 4.2,
+    "runSpeed": 7.0,
+    "sprintSpeed": 9.6,
+    "groundAccel": 70.0,
+    "groundDecel": 55.0,
+    "turnAccelBoost": 1.6,
+    "airAccel": 22.0,
+    "airMaxSpeedFactor": 1.0,
+    "jumpVelocity": 10.2,
+    "jumpCutFactor": 0.5,
+    "coyoteTime": 0.12,
+    "jumpBuffer": 0.14,
+    "maxFallSpeed": 32.0,
+    "stepHeight": 0.5,
+    "radius": 0.36,
+    "height": 1.8,
+    "slideHeight": 0.95,
+    "staminaMax": 100.0,
+    "staminaDrain": 22.0,
+    "staminaRegen": 16.0,
+    "staminaRegenDelay": 0.8,
+    "staminaMinToSprint": 12.0,
+    "slideMinSpeed": 5.5,
+    "slideBoost": 3.2,
+    "slideMaxSpeed": 13.5,
+    "slideFriction": 7.5,
+    "slideDuration": 0.85,
+    "slideCooldown": 0.55,
+    "slideStaminaCost": 10.0,
+    "dodgeSpeed": 15.0,
+    "dodgeDuration": 0.16,
+    "dodgeCooldown": 1.6,
+    "dodgeStaminaCost": 18.0,
+    "vaultMinHeight": 0.45,
+    "vaultMaxHeight": 1.35,
+    "vaultMaxDepth": 2.6,
+    "vaultDuration": 0.42,
+    "mantleMaxHeight": 2.5,
+    "mantleDuration": 0.38,
+    "wallJumpVelocity": 9.0,
+    "wallJumpPush": 7.5,
+    "wallJumpCooldown": 0.35,
+    "maxWallJumps": 2,
+    "padVelocity": 17.5
+  },
+
+  "tag": {
+    "range": 1.55,
+    "serverRangeTolerance": 0.6,
+    "latencyGraceMs": 200,
+    "cooldown": 1.2,
+    "newItFreeze": 1.0,
+    "noTagBackTime": 2.5,
+    "spawnProtection": 3.0,
+    "itSpeedBonus": 1.04
+  },
+
+  "perfectDodge": {
+    "_comment": "Dodge just as IT is about to tag you: slow-motion cinematic, tagger stunned, you get a speed boost.",
+    "window": 0.24,
+    "nearMiss": 1.1,
+    "closingSpeed": 1.0,
+    "netGrace": 0.12,
+    "slowmo": 0.15,
+    "animTime": 1.6,
+    "onlineAnimTime": 1.0,
+    "stunTime": 1.0,
+    "boostTime": 5.0,
+    "boostSpeed": 1.3,
+    "protectTime": 1.5
+  },
+
+  "match": {
+    "countdown": 3,
+    "resultsTime": 12,
+    "minPlayersOnline": 2,
+    "maxPlayers": 10,
+    "defaultBots": 5
+  },
+
+  "modes": {
+    "classic": {
+      "name": "Classic Tag",
+      "short": "Tag someone to pass IT. Least total time as IT wins.",
+      "duration": 180,
+      "startingIt": 1
+    },
+    "infection": {
+      "name": "Infection",
+      "short": "Tagged runners join the infected. Survive the clock to win.",
+      "duration": 150,
+      "startingIt": 1
+    },
+    "elimination": {
+      "name": "Last Runner",
+      "short": "Tagged runners are eliminated. Be the last one standing.",
+      "duration": 180,
+      "startingIt": 1
+    },
+    "practice": {
+      "name": "Practice",
+      "short": "No clock. Train movement and tagging against bots. Press T to swap IT.",
+      "duration": 0,
+      "startingIt": 1
+    }
+  },
+
+  "netValidation": {
+    "maxSpeedTolerance": 1.35,
+    "maxBurstSpeed": 22.0,
+    "teleportDistance": 7.0,
+    "maxMessagesPerSecond": 60,
+    "maxVerticalSpeed": 34.0
+  },
+
+  "progression": {
+    "xpParticipation": 40,
+    "xpPerTag": 15,
+    "xpPerSurvivalSecond": 0.5,
+    "xpWin": 100,
+    "xpTop3": 40,
+    "levelBaseXp": 150,
+    "levelStepXp": 60
+  },
+
+  "bots": {
+    "easy":   { "reaction": 0.55, "repath": 1.2, "aimError": 2.5, "sprintUse": 0.35, "usesMoves": false, "predict": 0.0, "mistakeRate": 0.25, "speedFactor": 0.9, "perfectDodge": 0.0 },
+    "normal": { "reaction": 0.30, "repath": 0.7, "aimError": 1.2, "sprintUse": 0.7,  "usesMoves": true,  "predict": 0.35, "mistakeRate": 0.1, "speedFactor": 1.0, "perfectDodge": 0.25 },
+    "hard":   { "reaction": 0.16, "repath": 0.4, "aimError": 0.5, "sprintUse": 1.0,  "usesMoves": true,  "predict": 0.75, "mistakeRate": 0.04, "speedFactor": 1.0, "perfectDodge": 0.5 }
+  }
+}
