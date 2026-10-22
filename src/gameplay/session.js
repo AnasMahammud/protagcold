@@ -387,6 +387,10 @@ export class MatchSession {
       this._outroCamera(dt);
       return;
     }
+    if (this.attract && this.previewOrbit) {
+      this._previewCamera(dt);
+      return;
+    }
     if (this.attract) {
       const subject = this.attractSubject();
       if (subject) rig.updateCinematicFollow(dt, subject.renderPos, time);
@@ -401,6 +405,32 @@ export class MatchSession {
     const target = this.spectateTarget();
     if (target) rig.updateSpectate(dt, localView(target), time);
     else if (local) rig.updateFollow(dt, localView(local), time);
+  }
+
+  /** Live map preview (Play screen, lobby): a slow orbit over the whole arena. */
+  _previewCamera(dt) {
+    const o = this.previewOrbit;
+    const cam = this.game.camera;
+    o.t = (o.t || 0) + dt;
+    const a = o.a0 + o.t * 0.07;
+    let x = o.cx + Math.cos(a) * o.r, y = o.h, z = o.cz + Math.sin(a) * o.r;
+    // never film through a wall or a floor
+    const dx = x - o.cx, dy = y - o.pivotY, dz = z - o.cz;
+    const len = Math.hypot(dx, dy, dz);
+    const hit = this.world.raycast(o.cx, o.pivotY, o.cz, dx / len, dy / len, dz / len, len, true);
+    if (hit) {
+      const k = Math.max(2, hit.t - 0.6) / len;
+      x = o.cx + dx * k; y = o.pivotY + dy * k; z = o.cz + dz * k;
+    }
+    if (!o.placed) {
+      cam.position.set(x, y, z);
+      o.placed = true;
+    } else cam.position.lerp({ x, y, z }, Math.min(1, dt * 3));
+    cam.lookAt(o.cx, o.pivotY + (o.indoor ? 0 : 1), o.cz);
+    if (Math.abs(cam.fov - 50) > 0.05) {
+      cam.fov = 50;
+      cam.updateProjectionMatrix();
+    }
   }
 
   attractSubject() {

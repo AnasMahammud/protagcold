@@ -16,6 +16,8 @@ import { Hud, esc } from './hud.js';
 import { CharacterPreview } from './preview.js';
 import { EndScreenFx, animateResults } from './endScreen.js';
 import { randomTip } from './tips.js';
+import { planOrbit } from '../gameplay/intro.js';
+import { readyBurst } from './readyFx.js';
 import { friends } from '../multiplayer/friends.js';
 import { ABILITY_IDS, ABILITY_INFO } from '../gameplay/abilities.js';
 import { abilityIcon, COIN_SVG } from './abilityIcons.js';
@@ -231,6 +233,12 @@ export class UI {
 
   // ------------------------------------------------------------------ navigation
   show(name, opts = {}) {
+    const same = this.current === name;
+    // leaving Play / the lobby: the menu's background match goes back to its close-up camera
+    if (!['play', 'lobby'].includes(name) && this.game.session?.previewOrbit) {
+      this.game.session.previewOrbit = null;
+      this.game.cameraRig.pivotInit = false;
+    }
     if (this.endFx && name !== 'results') {
       // leaving the results: the confetti / rays layer goes too
       this.endFx.dispose();
@@ -245,6 +253,7 @@ export class UI {
     const fn = this[`screen_${name}`];
     if (!fn) throw new Error(`No screen ${name}`);
     this.root.innerHTML = fn.call(this);
+    if (same) this.root.firstElementChild?.classList.add('no-anim'); // a re-render, not a new screen
     this[`bind_${name}`]?.call(this);
     // live data for social screens (stopped as soon as another screen is shown)
     clearInterval(this.pollTimer);
@@ -258,6 +267,7 @@ export class UI {
     if (name === 'lobby') {
       const log = this.root.querySelector('#chat-log');
       if (log) log.scrollTop = log.scrollHeight;
+      this._lobbyAfterRender();
     }
     this._refreshSocial();
     // focus the first control for keyboard/controller users
@@ -626,6 +636,29 @@ export class UI {
   }
 
   /** Re-render the lobby without losing what the player is typing. */
+  /** After every lobby render: the arena preview, the strip, ready pops and the all-ready chime. */
+  _lobbyAfterRender() {
+    const room = this.net.room;
+    if (!room) return;
+    this._bindArenaStrip();
+    this.previewMap(room.map);
+    const ready = new Set(room.players.filter((p) => p.ready).map((p) => p.id));
+    const before = this._readySeen || new Set();
+    // someone else just readied: their badge pops
+    for (const p of room.players) {
+      if (ready.has(p.id) && !before.has(p.id) && this._readySeen) {
+        const badge = this.root.querySelectorAll('.plist .prow')[room.players.indexOf(p)]?.querySelector('.badge.ready');
+        badge?.classList.add('pop');
+        if (p.id !== this.net.id) audio.play('uiClick');
+      }
+    }
+    if (this._readyPopUntil > performance.now()) this.root.querySelector('#ready-btn')?.classList.add('pop');
+    const allReady = room.players.length >= 2 && ready.size === room.players.length;
+    if (allReady && !this._wasAllReady && this._readySeen) audio.play('allReady');
+    this._wasAllReady = allReady;
+    this._readySeen = ready;
+  }
+
   _rerenderLobby() {
     const chat = this.root.querySelector('#chat-input');
     const name = this.root.querySelector('#room-name');
@@ -636,6 +669,8 @@ export class UI {
       nameFocus: document.activeElement === name,
     };
     this.root.innerHTML = this.screen_lobby();
+    this.root.firstElementChild?.classList.add('no-anim');
+    this._lobbyAfterRender();
     const c2 = this.root.querySelector('#chat-input');
     if (c2) {
       c2.value = keep.chat;
@@ -785,7 +820,10 @@ export class UI {
       saveJSON('lastOffline', this.offline);
       this.show('play', { replace: true });
     },
-    startOffline: () => this.startOffline({ ...this.offline, bots: Number(this.offline.bots) }),
+    startOffline: () => {
+      audio.play('readyUp');
+      this.startOffline({ ...this.offline, bots: Number(this.offline.bots) });
+    },
     startPractice: () => this.startOffline({ mode: 'practice', mapId: this.practice.mapId, bots: Number(this.practice.bots), difficulty: this.practice.difficulty }),
     connect: async () => {
       if (await this.connectOnline()) this.show('play', { replace: true });
@@ -860,9 +898,16 @@ export class UI {
       this.online[k] = k === 'public' ? t.dataset.value === 'true' : t.dataset.value;
       this.show('play', { replace: true });
     },
-    ready: () => {
+    ready: (t) => {
       const me = this.net.room?.players.find((p) => p.id === this.net.id);
-      this.net.send('ready', { ready: !me?.ready });
+      const nowReady = !me?.ready;
+      this.net.send('ready', { ready: nowReady });
+      audio.play(nowReady ? 'readyUp' : 'readyDown');
+      readyBurst(t, nowReady);
+      if (nowReady) this._readyPopUntil = performance.now() + 600;
+      t.classList.remove('pop');
+      void t.offsetWidth;
+      t.classList.add('pop');
     },
     hostSet: (t) => this.net.send('room_settings', { [t.dataset.key]: t.dataset.value }),
     startOnline: () => this.net.send('start_match'),
@@ -1040,69 +1085,88 @@ export class UI {
     this._liveLabel();
   }
 
+  /** The arena strip (bottom of Play / lobby): art, name and size; `pick` = data-action attrs or null. */
+  _arenaStrip(selected, pick) {
+    return `<div class="arena-strip" id="arena-strip">${this.maps.map((m, i) => {
+      const attrs = pick ? pick(m) : 'disabled';
+      return `<button class="arena-card ${selected === m.id ? 'selected' : ''}" style="--i:${i}" ${attrs}>
+        <div class="map-swatch ${esc(m.theme)}"></div>
+        <div class="ac-name">${esc(m.name)}</div>
+        <div class="ac-size">${m.size ? `${m.size[0]} × ${m.size[1]} m` : ''}</div>
+      </button>`;
+    }).join('')}</div>`;
+  }
+
+  /** Caption over the live 3D preview of an arena. */
+  _previewLabel(mapId, extra = '') {
+    const m = this.maps.find((x) => x.id === mapId);
+    if (!m) return '';
+    return `<div class="pv-label">
+      <span class="pv-live"><i></i>Live preview</span>
+      <h3>${esc(m.name)}</h3>
+      <p>${esc(m.description)}</p>
+      ${extra}
+    </div>
+    <div class="pv-loading"><span class="ls-spin"></span>Loading preview…</div>`;
+  }
+
   screen_play() {
     const o = this.offline;
     const modes = MODE_INFO();
-    const maps = this.maps;
     const net = this.net.status;
     this._playNetStatus = net;
     const pill = `<span class="net-pill ${net === 'online' ? 'ok' : net === 'error' ? 'bad' : net === 'connecting' ? 'wait' : ''}"><i></i><span>${{ online: 'Server online', connecting: 'Connecting…', error: 'Server unreachable', offline: 'Not connected', reconnecting: 'Reconnecting…' }[net]}</span></span>`;
     const onl = this.online;
+    const mode = modes.find((m) => m.id === o.mode) || modes[0];
     return `
-    <div class="screen center dim">
+    <div class="screen play-screen">
       <button class="btn ghost small back-btn" data-action="back"><span class="t">← Back</span></button>
-      <div class="page">
-        <h2 class="title">Play</h2>
-        <p class="subtitle">Pick a mode and an arena. Offline matches fill up with bots; online rooms are real players on the PRO TAG server.</p>
-        <div class="grid2">
-          <div class="panel">
-            <div class="label">Game mode</div>
-            <div class="cards" style="margin:10px 0 18px">
-              ${modes.map((m) => `<button class="card ${o.mode === m.id ? 'selected' : ''}" data-action="selectOffline" data-key="mode" data-value="${m.id}"><div class="name">${m.name}</div><div class="desc">${m.desc}</div><div class="desc">${m.duration ? `${Math.round(m.duration / 60)} min` : 'No clock'}</div>${['hotpotato', 'zone'].includes(m.id) ? '<span class="badge new">NEW</span>' : ''}</button>`).join('')}
-            </div>
-            <div class="label">Arena</div>
-            <div class="cards" style="margin:10px 0 18px">
-              ${maps.map((m) => `<button class="card ${o.mapId === m.id ? 'selected' : ''}" data-action="selectOffline" data-key="mapId" data-value="${m.id}"><div class="map-swatch ${m.theme}"></div><div class="name">${esc(m.name)}</div></button>`).join('')}
-            </div>
+      <div class="ps-top"><h2 class="title">Play</h2><p class="subtitle">Pick a mode and an arena. Offline matches fill up with bots; online rooms are real players.</p></div>
+      <aside class="ps-modes panel">
+        <div class="label">Game mode</div>
+        <div class="mode-list">
+          ${modes.map((m, i) => `<button class="mode-row ${o.mode === m.id ? 'selected' : ''}" style="--i:${i}" data-action="selectOffline" data-key="mode" data-value="${m.id}">
+            <span class="mr-name">${m.name}${['hotpotato', 'zone'].includes(m.id) ? ' <span class="badge new">NEW</span>' : ''}</span>
+            <span class="mr-clock">${m.duration ? `${Math.round(m.duration / 60)} min` : 'No clock'}</span>
+            ${o.mode === m.id ? `<span class="mr-desc">${m.desc}</span>` : ''}
+          </button>`).join('')}
+        </div>
+      </aside>
+      <div class="ps-preview" id="ps-preview">${this._previewLabel(o.mapId, `<span class="pv-mode">${esc(mode.name)}</span>`)}</div>
+      <aside class="ps-side">
+        <div class="panel ps-offline">
+          <div class="label">Offline vs bots</div>
+          <div class="row" style="margin:10px 0">
+            <span>Bots</span>
+            <button class="btn small ghost" data-action="botsDelta" data-d="-1"><span class="t">−</span></button>
+            <b style="min-width:24px;text-align:center;font-size:20px">${o.bots}</b>
+            <button class="btn small ghost" data-action="botsDelta" data-d="1"><span class="t">+</span></button>
           </div>
-          <div class="stack">
-            <div class="panel">
-              <div class="label">Offline vs bots</div>
-              <div class="row" style="margin:12px 0">
-                <span>Bots</span>
-                <button class="btn small ghost" data-action="botsDelta" data-d="-1"><span class="t">−</span></button>
-                <b style="min-width:24px;text-align:center;font-size:20px">${o.bots}</b>
-                <button class="btn small ghost" data-action="botsDelta" data-d="1"><span class="t">+</span></button>
-              </div>
-              <div class="seg" style="margin-bottom:16px">
-                ${['easy', 'normal', 'hard'].map((d) => `<button class="${o.difficulty === d ? 'on' : ''}" data-action="selectOffline" data-key="difficulty" data-value="${d}">${d}</button>`).join('')}
-              </div>
-              <button class="btn primary big" style="width:100%" data-action="startOffline"><span class="t">Start offline match</span></button>
-            </div>
-            <div class="panel">
-              <div class="row between"><div class="label">Online with friends</div>${pill}</div>
-              ${net === 'online' ? '' : `<p class="subtitle" style="margin:10px 0">Online play needs a PRO TAG website: open your friend's game address, or make your own with <span class="kbd">publish-website.bat</span> (README: "Your own website").</p>`}
-              <div class="row" style="margin:12px 0 10px">
-                <span class="label" style="margin-right:4px">New lobby</span>
-                <div class="seg"><button class="${onl.public ? 'on' : ''}" data-action="onlineOpt" data-key="public" data-value="true">Public</button><button class="${!onl.public ? 'on' : ''}" data-action="onlineOpt" data-key="public" data-value="false">Friends only</button></div>
-              </div>
-              <div class="row">
-                ${net === 'online' ? '' : `<button class="btn cyan" data-action="connect"><span class="t">Connect</span></button>`}
-                <button class="btn primary" data-action="createRoom"><span class="t">Create lobby</span></button>
-                <button class="btn" data-action="browse"><span class="t">Browse lobbies</span></button>
-              </div>
-              <div class="row" style="margin-top:10px">
-                <button class="btn" data-action="quickPlay"><span class="t">Quick play</span></button>
-                <button class="btn" data-action="friendsScreen"><span class="t">Friends</span><span class="badge ready friends-online"></span></button>
-              </div>
-              <div class="row" style="margin-top:12px">
-                <input type="text" id="join-code" class="code" maxlength="5" placeholder="CODE" aria-label="Lobby code" />
-                <button class="btn" data-action="joinRoom"><span class="t">Join with code</span></button>
-              </div>
-              <p class="subtitle" style="margin:12px 0 0;font-size:13px">The host picks the mode and arena inside the lobby. "Friends only" lobbies are hidden from the browser and Quick play — friends join with the code, your invite link, or an invite from the Friends screen.</p>
-            </div>
+          <div class="seg" style="margin-bottom:14px">
+            ${['easy', 'normal', 'hard'].map((d) => `<button class="${o.difficulty === d ? 'on' : ''}" data-action="selectOffline" data-key="difficulty" data-value="${d}">${d}</button>`).join('')}
+          </div>
+          <button class="btn primary big ready-btn go" style="width:100%" data-action="startOffline"><span class="t">▶ Start match</span></button>
+        </div>
+        <div class="panel ps-online">
+          <div class="row between"><div class="label">Online with friends</div>${pill}</div>
+          ${net === 'online' ? '' : `<p class="subtitle" style="margin:8px 0;font-size:12.5px">Needs a PRO TAG website: open your friend's game address, or make your own with <span class="kbd">publish-website.bat</span>.</p>`}
+          <div class="seg" style="margin:10px 0"><button class="${onl.public ? 'on' : ''}" data-action="onlineOpt" data-key="public" data-value="true">Public</button><button class="${!onl.public ? 'on' : ''}" data-action="onlineOpt" data-key="public" data-value="false">Friends only</button></div>
+          <div class="ps-grid">
+            ${net === 'online' ? '' : `<button class="btn small cyan" data-action="connect"><span class="t">Connect</span></button>`}
+            <button class="btn small primary" data-action="createRoom"><span class="t">Create lobby</span></button>
+            <button class="btn small" data-action="browse"><span class="t">Browse</span></button>
+            <button class="btn small" data-action="quickPlay"><span class="t">Quick play</span></button>
+            <button class="btn small" data-action="friendsScreen"><span class="t">Friends</span><span class="badge ready friends-online"></span></button>
+          </div>
+          <div class="row" style="margin-top:10px;flex-wrap:nowrap">
+            <input type="text" id="join-code" class="code" maxlength="5" placeholder="CODE" aria-label="Lobby code" style="flex:1;min-width:0" />
+            <button class="btn small" data-action="joinRoom"><span class="t">Join</span></button>
           </div>
         </div>
+      </aside>
+      <div class="ps-bottom">
+        <div class="label">Arena</div>
+        ${this._arenaStrip(o.mapId, (m) => `data-action="selectOffline" data-key="mapId" data-value="${m.id}"`)}
       </div>
     </div>`;
   }
@@ -1113,6 +1177,70 @@ export class UI {
       if (e.key === 'Enter') this.actions.joinRoom();
     });
     if (this.net.status === 'offline') this.connectOnline().then(() => this.current === 'play' && this._refreshNetPill());
+    this._bindArenaStrip();
+    this.previewMap(this.offline.mapId);
+  }
+
+  /** Horizontal arena strip: the wheel scrolls it sideways; keep the selected arena in view. */
+  _bindArenaStrip() {
+    const strip = this.root.querySelector('#arena-strip');
+    if (!strip) return;
+    if (this._stripScroll != null) strip.scrollLeft = this._stripScroll;
+    const sel = strip.querySelector('.selected');
+    if (sel && (sel.offsetLeft < strip.scrollLeft || sel.offsetLeft + sel.offsetWidth > strip.scrollLeft + strip.clientWidth)) strip.scrollLeft = sel.offsetLeft - 20;
+    strip.addEventListener('scroll', () => (this._stripScroll = strip.scrollLeft), { passive: true });
+    strip.addEventListener('wheel', (e) => {
+      if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+        strip.scrollLeft += e.deltaY;
+        e.preventDefault();
+      }
+    }, { passive: false });
+  }
+
+  // ------------------------------------------------------------------ live map preview
+  /** Switch the menu's background match to this arena and circle the camera round it. */
+  previewMap(mapId) {
+    if (!mapId || this.inMatch) return;
+    this._previewWant = mapId;
+    if (this.game.session?.attract && this.game.map?.id === mapId) {
+      this._previewReady();
+      return;
+    }
+    this._previewStatus(true);
+    clearTimeout(this._previewT);
+    this._previewT = setTimeout(() => this._loadPreview(mapId), 180); // clicking through arenas quickly loads only the last one
+  }
+
+  async _loadPreview(mapId) {
+    if (this.inMatch || this._previewWant !== mapId) return;
+    if (this.attractBusy) {
+      this._previewT = setTimeout(() => this._loadPreview(mapId), 150);
+      return;
+    }
+    this.attractBusy = true;
+    try {
+      const m = await LocalMatch.create(this.game, { mode: 'classic', mapId, bots: 7, difficulty: 'normal', attract: true });
+      if (this.inMatch) m.dispose();
+      else {
+        this.game.setSession(m);
+        this._envAudio(mapId, true);
+      }
+    } catch (err) {
+      if (!err.superseded) console.error('[ui] map preview failed', err);
+    } finally {
+      this.attractBusy = false;
+    }
+    if (this._previewWant === mapId) this._previewReady();
+  }
+
+  _previewReady() {
+    const s = this.game.session;
+    if (s?.attract && ['play', 'lobby'].includes(this.current) && !s.previewOrbit) s.previewOrbit = planOrbit(this.game);
+    this._previewStatus(false);
+  }
+
+  _previewStatus(loading) {
+    this.root.querySelector('.ps-preview')?.classList.toggle('loading', loading);
   }
 
   screen_practice() {
@@ -1157,69 +1285,65 @@ export class UI {
       const kickBtn = isHost && !mine ? `<button class="btn small danger" data-action="kick" data-id="${esc(p.id)}" data-name="${esc(p.name)}" title="Remove from lobby"><span class="t">Kick</span></button>` : '';
       return `<div class="prow"><span class="dot" style="background:${esc(p.cosm?.primary || '#888')}"></span><span class="pname">${esc(p.name)} <span class="tagcode">#${esc(p.tag || '')}</span>${TITLES[p.cosm?.title] && p.cosm.title !== 'none' ? `<span class="ptitle">${esc(TITLES[p.cosm.title].name)}</span>` : ''}</span>${p.id === room.host ? '<span class="badge host">Host</span>' : ''}${mine ? '<span class="badge you">You</span>' : ''}${p.connected === false ? '<span class="badge wait">Reconnecting</span>' : ''}<span class="badge ${p.ready ? 'ready' : 'wait'}">${p.ready ? 'Ready' : 'Not ready'}</span>${addBtn}${kickBtn}</div>`;
     };
+    const readyCount = room.players.filter((p) => p.ready).length;
     return `
-    <div class="screen center dim">
-      <div class="page" style="max-width:1080px">
-        <div class="row between lobby-head">
-          <div style="flex:1;min-width:260px">
-            ${isHost ? `<input type="text" id="room-name" class="room-name" maxlength="24" value="${esc(room.name)}" aria-label="Lobby name" title="Rename the lobby" />` : `<h2 class="title">${esc(room.name)}</h2>`}
-            <p class="subtitle" style="margin:4px 0 0">${room.public ? 'Public lobby — listed in the lobby browser and Quick play.' : 'Friends-only lobby — join with the code, an invite link or an invite.'} Host: <b>${esc(room.players.find((p) => p.id === room.host)?.name || '?')}</b></p>
-          </div>
-          <div style="text-align:right">
-            <div class="label">Lobby code</div>
-            <div class="room-code">${esc(room.code)}</div>
-            <div class="row end" style="gap:6px">
-              <button class="btn small" data-action="copyRoomCode"><span class="t">Copy code</span></button>
-              <button class="btn small cyan" data-action="copyInvite"><span class="t">Copy invite link</span></button>
-            </div>
+    <div class="screen lobby-screen">
+      <header class="lb-top">
+        <div class="lb-name">
+          ${isHost ? `<input type="text" id="room-name" class="room-name" maxlength="24" value="${esc(room.name)}" aria-label="Lobby name" title="Rename the lobby" />` : `<h2 class="title">${esc(room.name)}</h2>`}
+          <p class="subtitle" style="margin:4px 0 0">${room.public ? 'Public lobby: listed in the lobby browser and Quick play.' : 'Friends-only lobby: join with the code, an invite link or an invite.'} Host: <b>${esc(room.players.find((p) => p.id === room.host)?.name || '?')}</b></p>
+          ${localOnly ? `<p class="subtitle hint-box" style="margin:6px 0 0">Friends can't reach this copy of the game: it only runs on your PC. Run <span class="kbd">publish-website.bat</span> once (README "Your own website"), or use <span class="kbd">start-online.bat</span> for a quick link.</p>` : ''}
+        </div>
+        <div class="lb-code">
+          <div class="label">Lobby code</div>
+          <div class="room-code">${esc(room.code)}</div>
+          <div class="row end" style="gap:6px">
+            <button class="btn small" data-action="copyRoomCode"><span class="t">Copy code</span></button>
+            <button class="btn small cyan" data-action="copyInvite"><span class="t">Copy invite link</span></button>
           </div>
         </div>
-        ${localOnly ? `<p class="subtitle hint-box">Friends can't reach this copy of the game — it only runs on your PC. To play with friends, give them a website: run <span class="kbd">publish-website.bat</span> once (see README "Your own website"), or use <span class="kbd">start-online.bat</span> for a quick temporary link.</p>` : ''}
-        <div class="grid2" style="grid-template-columns:1.15fr 1fr;margin-top:14px">
-          <div class="stack">
-            <div class="panel">
-              <div class="row between"><div class="label">Players ${room.players.length}/${room.max}</div><span class="net-pill ok"><i></i><span>Ping ${Math.round(this.net.rtt * 1000)} ms</span></span></div>
-              <div class="plist" style="margin-top:12px">${room.players.map(playerRow).join('')}</div>
-            </div>
-            <div class="panel">
-              <div class="label">Lobby chat</div>
-              <div class="chat-log" id="chat-log">${this.chatHtml()}</div>
-              <div class="row" style="flex-wrap:nowrap">
-                <input type="text" id="chat-input" maxlength="140" placeholder="Message the lobby…" aria-label="Chat message" style="flex:1;min-width:0" />
-                <button class="btn small" data-action="sendChat"><span class="t">Send</span></button>
-              </div>
-            </div>
-          </div>
-          <div class="stack">
-            <div class="panel">
-              <div class="label">Mode</div>
-              <div class="seg" style="margin:8px 0 10px">${ONLINE_MODE_IDS.map((m) => `<button class="${room.mode === m ? 'on' : ''}" ${isHost ? `data-action="hostSet" data-key="mode" data-value="${m}"` : 'disabled'}>${cfg.modes[m].name}</button>`).join('')}</div>
-              <div class="desc" style="color:var(--muted);font-size:13px;margin-bottom:12px">${esc(cfg.modes[room.mode]?.short || '')}</div>
-              <div class="label">Arena</div>
-              <div class="seg" style="margin:8px 0 12px">${this.maps.map((m) => `<button class="${room.map === m.id ? 'on' : ''}" ${isHost ? `data-action="hostSet" data-key="map" data-value="${m.id}"` : 'disabled'}>${esc(m.name)}</button>`).join('')}</div>
-              <div class="label">Who can join</div>
-              <div class="seg" style="margin:8px 0 12px"><button class="${room.public ? 'on' : ''}" ${isHost ? 'data-action="hostSet" data-key="public" data-value="true"' : 'disabled'}>Public</button><button class="${!room.public ? 'on' : ''}" ${isHost ? 'data-action="hostSet" data-key="public" data-value="false"' : 'disabled'}>Friends only</button></div>
-              <div class="label">Lobby size</div>
-              <div class="seg" style="margin:8px 0 6px">${sizes.map((n) => `<button class="${room.max === n ? 'on' : ''}" ${isHost ? `data-action="hostSet" data-key="max" data-value="${n}"` : 'disabled'}>${n}</button>`).join('')}</div>
-              ${isHost ? '' : '<div class="label" style="color:var(--dim);margin-top:8px">Only the host can change lobby settings.</div>'}
-              <!-- BOT CONTROLS -->
-              ${countdown}
-            </div>
-            <div class="panel">
-              <div class="row between"><div class="label">Invite friends</div><button class="btn small ghost" data-action="friendsScreen"><span class="t">Manage friends</span></button></div>
-              <div id="invite-friends" class="plist" style="margin-top:10px">${this.inviteFriendsHtml()}</div>
-            </div>
+      </header>
+      <aside class="lb-left">
+        <div class="panel lb-players">
+          <div class="row between"><div class="label">Players ${room.players.length}/${room.max} · ${readyCount} ready</div><span class="net-pill ok"><i></i><span>Ping ${Math.round(this.net.rtt * 1000)} ms</span></span></div>
+          <div class="plist" style="margin-top:10px">${room.players.map(playerRow).join('')}</div>
+        </div>
+        <div class="panel lb-chat">
+          <div class="label">Lobby chat</div>
+          <div class="chat-log" id="chat-log">${this.chatHtml()}</div>
+          <div class="row" style="flex-wrap:nowrap">
+            <input type="text" id="chat-input" maxlength="140" placeholder="Message the lobby…" aria-label="Chat message" style="flex:1;min-width:0" />
+            <button class="btn small" data-action="sendChat"><span class="t">Send</span></button>
           </div>
         </div>
-        <div class="row between" style="margin-top:18px">
-          <button class="btn danger" data-action="leaveRoom"><span class="t">Leave room</span></button>
-          <div class="row">
-            <button class="btn ${me?.ready ? '' : 'cyan'}" data-action="ready" ${room.phase === 'lobby' || room.phase === 'results' ? '' : 'disabled'}><span class="t">${me?.ready ? 'Unready' : 'Ready up'}</span></button>
-            ${isHost ? `<button class="btn primary" data-action="startOnline" ${allReady && room.phase === 'lobby' ? '' : 'disabled'} title="${allReady ? '' : 'Needs at least 2 players, all ready'}"><span class="t">Start match</span></button>` : ''}
+      </aside>
+      <div class="ps-preview" id="ps-preview">${this._previewLabel(room.map, `<span class="pv-mode">${esc(cfg.modes[room.mode]?.name || room.mode)}</span>`)}${countdown ? `<div class="pv-banner">${countdown}</div>` : ''}</div>
+      <aside class="lb-right">
+        <div class="panel">
+          <div class="label">Mode</div>
+          <div class="seg" style="margin:8px 0 8px">${ONLINE_MODE_IDS.map((m) => `<button class="${room.mode === m ? 'on' : ''}" ${isHost ? `data-action="hostSet" data-key="mode" data-value="${m}"` : 'disabled'}>${cfg.modes[m].name}</button>`).join('')}</div>
+          <div class="desc" style="color:var(--muted);font-size:13px;margin-bottom:10px">${esc(cfg.modes[room.mode]?.short || '')}</div>
+          <div class="label">Who can join</div>
+          <div class="seg" style="margin:8px 0 10px"><button class="${room.public ? 'on' : ''}" ${isHost ? 'data-action="hostSet" data-key="public" data-value="true"' : 'disabled'}>Public</button><button class="${!room.public ? 'on' : ''}" ${isHost ? 'data-action="hostSet" data-key="public" data-value="false"' : 'disabled'}>Friends only</button></div>
+          <div class="label">Lobby size</div>
+          <div class="seg" style="margin:8px 0 4px">${sizes.map((n) => `<button class="${room.max === n ? 'on' : ''}" ${isHost ? `data-action="hostSet" data-key="max" data-value="${n}"` : 'disabled'}>${n}</button>`).join('')}</div>
+          ${isHost ? '' : '<div class="label" style="color:var(--dim);margin-top:8px">Only the host can change lobby settings.</div>'}
+        </div>
+        <div class="panel">
+          <div class="row between"><div class="label">Invite friends</div><button class="btn small ghost" data-action="friendsScreen"><span class="t">Manage</span></button></div>
+          <div id="invite-friends" class="plist" style="margin-top:10px">${this.inviteFriendsHtml()}</div>
+        </div>
+      </aside>
+      <footer class="lb-bottom">
+        <div class="lb-arenas"><div class="label">Arena${isHost ? '' : ' (the host picks)'}</div>${this._arenaStrip(room.map, isHost ? (m) => `data-action="hostSet" data-key="map" data-value="${m.id}"` : null)}</div>
+        <div class="lb-actions">
+          <button class="btn ready-btn ${me?.ready ? 'is-ready' : 'cyan'}" id="ready-btn" data-action="ready" ${room.phase === 'lobby' || room.phase === 'results' ? '' : 'disabled'}><span class="t">${me?.ready ? '✓ Ready!' : 'Ready up'}</span>${me?.ready ? '<small>click to unready</small>' : ''}</button>
+          <div class="row" style="flex-wrap:nowrap;gap:8px">
+            <button class="btn small danger" data-action="leaveRoom"><span class="t">Leave</span></button>
+            ${isHost ? `<button class="btn small primary ${allReady && room.phase === 'lobby' ? 'go' : ''}" style="flex:1" data-action="startOnline" ${allReady && room.phase === 'lobby' ? '' : 'disabled'} title="${allReady ? '' : `Needs at least ${cfg.match.minPlayersOnline} players, all ready`}"><span class="t">Start match</span></button>` : ''}
           </div>
         </div>
-        ${isHost && !allReady ? `<p class="subtitle" style="text-align:right;margin-top:8px">Start unlocks when at least ${cfg.match.minPlayersOnline} players are in and everyone is ready.</p>` : ''}
-      </div>
+      </footer>
     </div>`;
   }
 

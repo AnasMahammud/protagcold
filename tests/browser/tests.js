@@ -1270,6 +1270,47 @@ suite('Main menu & loading screens', () => {
   });
 });
 
+// --------------------------------------------------------------------------- play & lobby (v1.07)
+const { planOrbit } = await import('../../src/gameplay/intro.js');
+suite('Play screen & lobby', () => {
+  const base = () => ({
+    maps: mapIndex,
+    _arenaStrip: UI.prototype._arenaStrip,
+    _previewLabel: UI.prototype._previewLabel,
+  });
+  test('Play: modes left, live preview in the middle, every arena on the bottom strip', () => {
+    const fake = { ...base(), offline: { mode: 'zone', mapId: 'mall', bots: 5, difficulty: 'normal' }, online: { public: true }, net: { status: 'online' } };
+    const box = document.createElement('div');
+    box.innerHTML = UI.prototype.screen_play.call(fake);
+    expect(box.querySelector('.play-screen .ps-modes .mode-row.selected [class=mr-name]')?.textContent.includes(cfg.modes.zone.name), 'selected mode');
+    const cards = [...box.querySelectorAll('#arena-strip .arena-card')];
+    expect(cards.length === mapIndex.length && cards.filter((c) => c.classList.contains('selected')).length === 1, `${cards.length} arenas, one selected`);
+    expect(cards.every((c) => c.dataset.action === 'selectOffline' && c.dataset.key === 'mapId'), 'arenas are clickable');
+    expect(box.querySelector('.ps-preview .pv-label h3')?.textContent === mapIndex.find((m) => m.id === 'mall').name, 'preview caption');
+    expect(box.querySelector('[data-action="startOffline"].ready-btn'), 'start button');
+  });
+  test('lobby: landscape layout, the host picks the arena, a big ready button', () => {
+    const room = { code: 'ABCDE', name: 'Test lobby', public: true, host: 'me', max: 6, mode: 'hotpotato', map: 'factory', phase: 'lobby',
+      players: [{ id: 'me', name: 'Me', tag: 'AAA111', ready: false, cosm: {} }, { id: 'you', name: 'You', tag: 'BBB222', ready: true, cosm: {} }] };
+    for (const host of [true, false]) {
+      const fake = { ...base(), net: { room: { ...room, host: host ? 'me' : 'you' }, id: 'me', rtt: 0.03 }, inviteBase: () => 'https://example.test', chatHtml: () => '', inviteFriendsHtml: () => '' };
+      const box = document.createElement('div');
+      box.innerHTML = UI.prototype.screen_lobby.call(fake);
+      const cards = [...box.querySelectorAll('#arena-strip .arena-card')];
+      expect(box.querySelector('.lobby-screen .lb-left .plist') && box.querySelector('.lb-right') && box.querySelector('.ps-preview .pv-label'), 'three columns');
+      expect(cards.find((c) => c.classList.contains('selected'))?.textContent.includes(mapIndex.find((m) => m.id === 'factory').name), 'the room arena is selected');
+      expect(host ? cards.every((c) => c.dataset.action === 'hostSet') : cards.every((c) => c.disabled), host ? 'host can pick' : 'guests just see it');
+      expect(box.querySelector('#ready-btn[data-action="ready"]')?.textContent.includes('Ready up'), 'ready button');
+    }
+  });
+  test('the live preview camera has a clear orbit on every arena', () => {
+    for (const id of Object.keys(maps)) {
+      const o = planOrbit({ map: { data: maps[id].data, world: maps[id].world } });
+      expect(o.r > 5 && o.h > 4, `${id}: orbit r ${o.r.toFixed(1)} h ${o.h.toFixed(1)}`);
+    }
+  });
+});
+
 // --------------------------------------------------------------------------- map events & versions
 const { EventScheduler, eventMods, eventsForMap, EVENT_INFO } = await import('../../src/gameplay/mapEvents.js');
 const { VERSION, CHANGELOG } = await import('../../src/core/version.js');

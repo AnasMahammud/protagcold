@@ -1,8 +1,24 @@
 // Game version + update history. Every update bumps VERSION and adds an entry at the TOP of
 // CHANGELOG: the first time a player opens a new version, the "What's new" screen shows it.
-export const VERSION = '1.06';
+export const VERSION = '1.07';
 
 export const CHANGELOG = [
+  {
+    version: '1.07',
+    date: '2026-10-22',
+    title: 'Live arena previews & a new Play screen',
+    sections: [
+      ['Live map preview', [
+        'Pick an arena on the Play screen (or in a lobby) and the background flies over that arena for real, with bots playing on it.',
+      ]],
+      ['Landscape layout', [
+        'The Play screen and lobbies are laid out side to side: modes (or players and chat) on the left, the live preview in the middle, match setup on the right, and the arenas as a scrolling strip along the bottom.',
+      ]],
+      ['Ready up!', [
+        'The Ready button pops with a shockwave, sparks and a "READY!" with its own sound effect. Other players getting ready pop too, and a fanfare plays once everyone is ready.',
+      ]],
+    ],
+  },
   {
     version: '1.06',
     date: '2026-10-22',

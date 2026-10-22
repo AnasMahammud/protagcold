@@ -35,42 +35,8 @@ export class MatchIntro {
     audio.play('introRise');
   }
 
-  /** Frame the arena: find an orbit height and radius with a clear view all the way round. */
   _planOrbit() {
-    const data = this.game.map.data;
-    const w = this.game.map.world;
-    const [x0, z0, x1, z1] = data.bounds;
-    const cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
-    const half = Math.max(x1 - x0, z1 - z0) / 2;
-    let top = 0;
-    for (const s of data.solids) if (s.m !== 'invisible' && s.b[0] > x0 - 1 && s.b[3] < x1 + 1) top = Math.max(top, s.b[4]);
-    const ceiling = Math.min(Infinity, ...(data.decor || []).filter((d) => d.t === 'ceiling').map((d) => d.y));
-    const indoor = Number.isFinite(ceiling);
-    const pivotY = indoor ? 3 : Math.min(6, top * 0.3);
-    const heights = indoor ? [ceiling - 2.5, ceiling - 4, ceiling - 6, ceiling - 8] : [Math.max(half * 0.45, top + 6)];
-    const radii = indoor ? [0.62, 0.5, 0.38] : [0.9, 0.75];
-    let best = null;
-    for (const h of heights) {
-      for (const rf of radii) {
-        const r = half * rf;
-        let score = 0;
-        for (let i = 0; i < 16; i++) {
-          const a = (i / 16) * Math.PI * 2;
-          const px = cx + Math.cos(a) * r, pz = cz + Math.sin(a) * r;
-          if (!w.isFree(px, h - 0.4, pz, 0.5, 0.8)) continue;
-          const dx = px - cx, dy = h - pivotY, dz = pz - cz;
-          const len = Math.hypot(dx, dy, dz);
-          const hit = w.raycast(cx, pivotY, cz, dx / len, dy / len, dz / len, len, true);
-          score += hit ? 0.3 : 1;
-        }
-        score += rf * 2; // prefer the wider, more cinematic framings
-        if (!best || score > best.score) best = { h, r, score };
-      }
-    }
-    // start opposite your spawn, so the spin ends on your side of the arena
-    const me = this.s.local;
-    const a0 = me ? Math.atan2(me.ctrl.pos.z - cz, me.ctrl.pos.x - cx) + Math.PI * 0.85 : 0;
-    this.orbit = { cx, cz, h: best.h, r: best.r, pivotY, a0, indoor };
+    this.orbit = planOrbit(this.game, this.s.local);
   }
 
   _planEmotes() {
@@ -192,4 +158,43 @@ const smoother = (x) => x * x * x * (x * (x * 6 - 15) + 10);
 
 function esc(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+}
+
+/** Frame the arena: an orbit height and radius with a clear view all the way round (also used by
+ * the live map preview on the Play screen and in lobbies). `local` = whose side to end on. */
+export function planOrbit(game, local = null) {
+  const data = game.map.data;
+  const w = game.map.world;
+  const [x0, z0, x1, z1] = data.bounds;
+  const cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
+  const half = Math.max(x1 - x0, z1 - z0) / 2;
+  let top = 0;
+  for (const s of data.solids) if (s.m !== 'invisible' && s.b[0] > x0 - 1 && s.b[3] < x1 + 1) top = Math.max(top, s.b[4]);
+  const ceiling = Math.min(Infinity, ...(data.decor || []).filter((d) => d.t === 'ceiling').map((d) => d.y));
+  const indoor = Number.isFinite(ceiling);
+  const pivotY = indoor ? 3 : Math.min(6, top * 0.3);
+  const heights = indoor ? [ceiling - 2.5, ceiling - 4, ceiling - 6, ceiling - 8] : [Math.max(half * 0.45, top + 6)];
+  const radii = indoor ? [0.62, 0.5, 0.38] : [0.9, 0.75];
+  let best = null;
+  for (const h of heights) {
+    for (const rf of radii) {
+      const r = half * rf;
+      let score = 0;
+      for (let i = 0; i < 16; i++) {
+        const a = (i / 16) * Math.PI * 2;
+        const px = cx + Math.cos(a) * r, pz = cz + Math.sin(a) * r;
+        if (!w.isFree(px, h - 0.4, pz, 0.5, 0.8)) continue;
+        const dx = px - cx, dy = h - pivotY, dz = pz - cz;
+        const len = Math.hypot(dx, dy, dz);
+        const hit = w.raycast(cx, pivotY, cz, dx / len, dy / len, dz / len, len, true);
+        score += hit ? 0.3 : 1;
+      }
+      score += rf * 2; // prefer the wider, more cinematic framings
+      if (!best || score > best.score) best = { h, r, score };
+    }
+  }
+  // start opposite your spawn, so the spin ends on your side of the arena
+  const me = local;
+  const a0 = me ? Math.atan2(me.ctrl.pos.z - cz, me.ctrl.pos.x - cx) + Math.PI * 0.85 : 0;
+  return { cx, cz, h: best.h, r: best.r, pivotY, a0, indoor };
 }

@@ -15,6 +15,12 @@ The browser page shows each result and exposes `window.__TEST_RESULTS__` for aut
 
 ## Latest results (development machine: Windows 11, Intel UHD GPU, Chromium)
 
+### v1.07: Play screen, lobby, live map preview (2026-10-22)
+
+- **Python: 82 / 82 passed** (no server changes). **Browser: 155 / 155 passed.** New: the Play screen renders the modes, the preview caption, every arena on the strip (one selected, all clickable) and the start button; the lobby renders three columns and the ready button, and only lets the host pick the arena (guests see it disabled); the preview camera finds a clear orbit on every arena.
+- **Real client checks:** Play with the live fly-over of Splash Kingdom behind the layout; a real lobby on the local server (Neon Rooftops preview, players and chat, settings, arena strip); pressing Ready (the button turned green with "click to unready", the badge and "1 ready" updated, and the burst showed its glow, rings, sparks and READY!); leaving the lobby put the menu's background camera back to following the bots. Two bugs were found and fixed: the arena caption, and the menu's LIVE pill from v1.06, were off-centre (an entrance animation replaced the transform that centred them), and the Play screen's NEW badges were stacking in the panel corner.
+
+
 ### v1.06: UI refresh (2026-10-22)
 
 - **Python: 82 / 82 passed** (no server changes). **Browser: 152 / 152 passed.** New: the main menu has the logo, ten buttons each with its slide-in index, the Battle Pass entry, Credits in the footer and the LIVE caption; the arena loading screen shows the arena name, mode, art, step and a tip, and works without an arena.

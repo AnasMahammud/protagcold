@@ -250,7 +250,7 @@ export class AudioEngine {
   }
 }
 
-const UI_SOUNDS = new Set(['titleSlam', 'defeatHit', 'introRise', 'introWhoosh', 'scrambled', 'eventWarn', 'eventStart', 'powerDown', 'powerUp', 'zoneClosing', 'perfectDodge', 'timeResume', 'boost', 'outplayed', 'uiHover', 'uiClick', 'uiBack', 'countdown', 'go', 'victory', 'defeat', 'levelUp', 'unlock', 'error', 'purchase', 'abilityDenied', 'abilityReady']);
+const UI_SOUNDS = new Set(['readyUp', 'readyDown', 'allReady', 'titleSlam', 'defeatHit', 'introRise', 'introWhoosh', 'scrambled', 'eventWarn', 'eventStart', 'powerDown', 'powerUp', 'zoneClosing', 'perfectDodge', 'timeResume', 'boost', 'outplayed', 'uiHover', 'uiClick', 'uiBack', 'countdown', 'go', 'victory', 'defeat', 'levelUp', 'unlock', 'error', 'purchase', 'abilityDenied', 'abilityReady']);
 
 const THROTTLE = {
   footstep: [0.07, 8],
@@ -472,6 +472,27 @@ const SFX = {
     a._noise(out, t, 0.5, { type: 'lowpass', freq: 3000, freqEnd: 150, q: 0.6, gain: 0.5 });
     a._tone(out, t, 0.25, { type: 'sawtooth', freq: 400, freqEnd: 60, gain: 0.12 });
     return 0.8;
+  },
+  readyUp(a, out, t) {
+    // READY! a thump, a clap and a bright rising arpeggio
+    a._tone(out, t, 0.25, { freq: 110, freqEnd: 55, gain: 0.7, attack: 0.002 });
+    a._noise(out, t + 0.01, 0.12, { type: 'bandpass', freq: 1500, q: 0.9, gain: 0.45, attack: 0.001 });
+    a._noise(out, t, 0.35, { freq: 500, freqEnd: 3500, q: 0.6, gain: 0.12, attack: 0.03 });
+    for (const [i, f] of [523.25, 659.25, 783.99, 1046.5].entries()) a._tone(out, t + 0.05 + i * 0.055, 0.22, { type: 'square', freq: f, gain: 0.05 });
+    a._tone(out, t + 0.27, 0.5, { type: 'triangle', freq: 1567.98, gain: 0.07 });
+    return 0.8;
+  },
+  readyDown(a, out, t) {
+    a._tone(out, t, 0.09, { type: 'square', freq: 660, gain: 0.04 });
+    a._tone(out, t + 0.09, 0.14, { type: 'square', freq: 440, freqEnd: 400, gain: 0.04 });
+    return 0.25;
+  },
+  allReady(a, out, t) {
+    // everyone is ready: a short fanfare
+    for (const [i, f] of [392, 523.25, 659.25].entries()) a._tone(out, t + i * 0.09, 0.3, { type: 'triangle', freq: f, gain: 0.07 });
+    a._tone(out, t + 0.27, 0.7, { type: 'sawtooth', freq: 783.99, gain: 0.04, attack: 0.02 });
+    a._noise(out, t + 0.27, 0.4, { type: 'highpass', freq: 4000, q: 0.4, gain: 0.08 });
+    return 1.0;
   },
   titleSlam(a, out, t) {
     // VICTORY lands: a deep boom, a bright crash and a rising major chord
