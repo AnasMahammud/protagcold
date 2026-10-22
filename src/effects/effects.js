@@ -156,6 +156,8 @@ class Trail {
       let c = this.color;
       if (this.style === 'rainbow') c = this.tmp.setHSL((time * 0.5 + t) % 1, 1, 0.55);
       else if (this.style === 'ember') c = this.tmp.setRGB(1, 0.35 + 0.3 * (1 - t), 0.1);
+      else if (this.style === 'glitch') c = this.tmp.set((i + Math.floor(time * 20)) % 4 < 2 ? '#7dff6b' : '#ff3df0');
+      else if (this.style === 'gold') c = this.tmp.setRGB(1, 0.78 + 0.22 * t, 0.2 + 0.8 * t);
       const a = (1 - t) * 0.7 * q.w;
       const ck = i * 8;
       for (const o of [0, 4]) {
@@ -245,6 +247,20 @@ export class Effects {
       this.burst({ x: pos.x, y: pos.y + 0.2, z: pos.z }, color, { count: 30, speed: 10, size: 0.18, life: 0.4, up: 0.3, spread: 0.2, grav: 2 });
     } else if (style === 'confetti') {
       for (const col of ['#ff3df0', '#3df5ff', '#ffd23d', '#7dff6b']) this.burst(p, col, { count: 10, speed: 5, size: 0.2, life: 1.2, up: 5, grav: 7 });
+    } else if (style === 'glitch') {
+      this.ring(pos, '#7dff6b', 4.2, 0.35);
+      this.ring(pos, '#ff3df0', 2.6, 0.25);
+      this.burst(p, '#7dff6b', { count: 20, speed: 6, size: 0.16, life: 0.4, up: 0.5, grav: 0, spread: 0.5 });
+      this.burst(p, '#ff3df0', { count: 14, speed: 5, size: 0.14, life: 0.35, up: 0.5, grav: 0, spread: 0.5 });
+    } else if (style === 'fireworks') {
+      const cols = ['#ff3df0', '#3df5ff', '#ffd23d', '#7dff6b', '#ff7a2f'];
+      for (let i = 0; i < 4; i++) {
+        setTimeout(() => {
+          const c = cols[(i + Math.floor(Math.random() * 5)) % 5];
+          const q = { x: pos.x + (Math.random() - 0.5) * 2, y: pos.y + 2.6 + Math.random() * 1.6, z: pos.z + (Math.random() - 0.5) * 2 };
+          this.burst(q, c, { count: 26, speed: 6, size: 0.18, life: 0.9, up: 0.5, grav: 4 });
+        }, i * 140);
+      }
     } else if (style === 'lightning') {
       for (let i = 0; i < 3; i++) this.lightning({ x: pos.x, y: pos.y + 6, z: pos.z }, { x: pos.x + (Math.random() - 0.5), y: pos.y + 0.8, z: pos.z + (Math.random() - 0.5) }, '#bfe8ff');
     }

@@ -42,6 +42,8 @@ export class MatchSession {
     this.coins = null; // MapCoins, created by the subclass once the map is known
     this.grappleTarget = null;
     this.intro = null; // pre-match cutscene while it plays
+    // what the local player did this match (Battle Pass challenges)
+    this.localStats = { abilities: 0, emotes: 0, slides: 0, scrambles: 0 };
   }
 
   /** Play the pre-match map cutscene; resolves when it ends (or is skipped). */
@@ -272,6 +274,7 @@ export class MatchSession {
           if (p.id === this.localId) fx.dust(pos, 0.5);
           break;
         case 'ride':
+          if (p.id === this.localId) this.localStats.slides++;
           audio.play('rideStart', { pos, ownerId: p.id });
           if (p.id === this.localId) bus.emit('hud:feed', { kind: 'info', text: 'Wheee! Riding the slide' });
           break;
@@ -324,10 +327,64 @@ export class MatchSession {
     }
   }
 
+  /**
+   * Match over: freeze the controls, keep the winners dancing and slowly circle the camera
+   * round you if you won (or round the winner if you didn't) behind the end screens.
+   */
+  startOutro(result) {
+    const won = result.winners.includes(this.localId);
+    const firstWinner = result.ranking.find((r) => r.winner && this.players.get(r.id)?.connected);
+    const subject = won ? this.local : this.players.get(firstWinner?.id) || this.local;
+    if (!subject) return;
+    this.inputBlocked = true;
+    const yaw = subject.ctrl.yaw;
+    this.outroCam = { id: subject.id, t: 0, a: Math.atan2(-Math.sin(yaw), -Math.cos(yaw)) };
+    this.celebrating = result.winners.filter((id) => this.players.get(id) && !this.players.get(id).out);
+    this.game.cameraRig.shake(0.45);
+  }
+
+  _outroCamera(dt) {
+    const o = this.outroCam;
+    const p = this.players.get(o.id);
+    if (!p) return;
+    o.t += dt;
+    // winners keep celebrating (a new dance whenever one finishes)
+    for (const id of this.celebrating) {
+      const q = this.players.get(id);
+      if (q && !q.model.emote && q.ctrl.grounded !== false) q.model.playEmote(CELEBRATE[Math.floor(Math.random() * CELEBRATE.length)]);
+    }
+    const cam = this.game.camera;
+    const pos = p.renderPos;
+    const a = o.a + o.t * 0.32;
+    const r = 3.2 + Math.min(1, o.t / 4) * 1.2;
+    const py = pos.y + 1.15;
+    let cx = pos.x + Math.sin(a) * r, cy = py + 0.35 + Math.min(1, o.t / 4) * 0.5, cz = pos.z + Math.cos(a) * r;
+    // never inside a wall
+    const dx = cx - pos.x, dy = cy - py, dz = cz - pos.z;
+    const len = Math.hypot(dx, dy, dz);
+    const hit = this.world.raycast(pos.x, py, pos.z, dx / len, dy / len, dz / len, len, true);
+    if (hit) {
+      const k = Math.max(0.8, hit.t - 0.3) / len;
+      cx = pos.x + dx * k; cy = py + dy * k; cz = pos.z + dz * k;
+    }
+    if (o.t < 0.05) cam.position.set(cx, cy, cz);
+    else cam.position.lerp({ x: cx, y: cy, z: cz }, Math.min(1, dt * 4));
+    cam.lookAt(pos.x, py - 0.1, pos.z);
+    const fov = 52;
+    if (Math.abs(cam.fov - fov) > 0.05) {
+      cam.fov += (fov - cam.fov) * Math.min(1, dt * 3);
+      cam.updateProjectionMatrix();
+    }
+  }
+
   updateCamera(dt, time) {
     const rig = this.game.cameraRig;
     if (this.intro) {
       this.intro.update(dt, time);
+      return;
+    }
+    if (this.outroCam) {
+      this._outroCamera(dt);
       return;
     }
     if (this.attract) {
@@ -372,6 +429,7 @@ export class MatchSession {
   emote(id, emote) {
     const p = this.players.get(id);
     if (!p) return;
+    if (id === this.localId && p.model.emote !== emote) this.localStats.emotes++;
     p.model.playEmote(emote);
     this.onEmote?.(id, emote);
   }
@@ -639,7 +697,8 @@ export class MatchSession {
   }
 }
 
-const TRAIL_STYLE = { streak: 'ribbon', rainbow: 'rainbow', ember: 'ember', sparks: 'sparks' };
+const CELEBRATE = ['griddy', 'dance', 'flex', 'robot', 'buggin', 'wave'];
+const TRAIL_STYLE = { streak: 'ribbon', rainbow: 'rainbow', ember: 'ember', sparks: 'sparks', glitch: 'glitch', gold: 'gold' };
 const EDGE_KEYS = ['jumpPressed', 'slidePressed', 'dodgePressed', 'vaultPressed'];
 const ZERO_INPUT = Object.freeze({ mx: 0, mz: 0, jumpPressed: false, jumpHeld: false, sprint: false, slidePressed: false, dodgePressed: false, vaultPressed: false });
 

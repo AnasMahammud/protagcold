@@ -9,16 +9,18 @@ import { loadMapIndex } from '../maps/mapLoader.js';
 import { LocalMatch } from '../gameplay/localMatch.js';
 import { OnlineMatch } from '../multiplayer/onlineMatch.js';
 import { progression, xpForLevel } from '../progression/progression.js';
-import { HATS, COLORS, TRAILS, TAG_EFFECTS, EMOTES, EMOTE_IDS, isUnlocked, describeUnlock } from '../progression/cosmetics.js';
+import { HATS, COLORS, TRAILS, TAG_EFFECTS, EMOTES, EMOTE_IDS, TITLES, isUnlocked, describeUnlock } from '../progression/cosmetics.js';
+import * as BP from '../progression/battlepass.js';
 import { formatSeconds } from '../core/mathUtil.js';
 import { Hud, esc } from './hud.js';
 import { CharacterPreview } from './preview.js';
+import { EndScreenFx, animateResults } from './endScreen.js';
 import { friends } from '../multiplayer/friends.js';
 import { ABILITY_IDS, ABILITY_INFO } from '../gameplay/abilities.js';
 import { abilityIcon, COIN_SVG } from './abilityIcons.js';
 import { VERSION, CHANGELOG } from '../core/version.js';
 
-const NEW_EMOTES = new Set(['griddy', 'buggin', 'robot']); // "NEW" badge in Customise (v1.03)
+const NEW_EMOTES = new Set(['salute', 'chicken', 'chill', 'moonwalk']); // "NEW" badge in Customise (v1.04)
 
 const MODE_INFO = () => {
   const m = getConfig().modes;
@@ -73,6 +75,7 @@ export class UI {
       if (!locked && this.inMatch && !this.paused && !this.game.session?.ended && !this.touch.enabled && !this._suppressPause) this.pause();
     });
     bus.on('match:end', (m) => this.onMatchEnd(m));
+    bus.on('match:outro', (o) => this.onMatchOutro(o));
     bus.on('net:room', (m) => this.onRoom(m.room));
     bus.on('net:match_start', (m) => this.onOnlineMatchStart(m));
     bus.on('net:error', (m) => this.toast(m.msg || 'Server error', 'error'));
@@ -217,6 +220,11 @@ export class UI {
 
   // ------------------------------------------------------------------ navigation
   show(name, opts = {}) {
+    if (this.endFx && name !== 'results') {
+      // leaving the results: the confetti / rays layer goes too
+      this.endFx.dispose();
+      this.endFx = null;
+    }
     if (this.preview && name !== 'customise') {
       this.preview.dispose();
       this.preview = null;
@@ -478,6 +486,8 @@ export class UI {
   }
 
   leaveMatch(toMenu = true) {
+    this.endFx?.dispose();
+    this.endFx = null;
     this.matchToken++;
     this._suppressPause = true;
     this.input.exitPointerLock();
@@ -504,8 +514,17 @@ export class UI {
     audio.playMusic('menu');
   }
 
+  /** The match just ended: the VICTORY / DEFEAT slam (the results follow in a moment). */
+  onMatchOutro(o) {
+    this.endFx?.dispose();
+    this.hud.show(false);
+    this.input.exitPointerLock();
+    this.endFx = new EndScreenFx(o.won, { title: o.won ? 'VICTORY' : 'DEFEAT', sub: o.sub, place: o.place, total: o.total });
+  }
+
   onMatchEnd(m) {
     this.lastResult = m;
+    this.endFx?.toResults();
     this.paused = false;
     this.hud.show(false);
     this._suppressPause = true;
@@ -917,6 +936,21 @@ export class UI {
       progression.equip(slot, progression.profile.abilities.loadout[slot] === id ? null : id);
       this.show('abilities', { replace: true });
     },
+    claimPass: (t) => {
+      const r = progression.claimPass(t.dataset.track, Number(t.dataset.tier));
+      if (r.ok) this._claimed([r.reward]);
+      this.show('pass', { replace: true });
+    },
+    claimAllPass: () => {
+      this._claimed(progression.claimAllPass());
+      this.show('pass', { replace: true });
+    },
+    buyPremium: () => {
+      const r = progression.buyPremiumPass();
+      audio.play(r.ok ? 'purchase' : 'error');
+      this.toast(r.ok ? `${r.msg} Every tier you've reached is ready to claim.` : r.msg, r.ok ? 'good' : 'error');
+      this.show('pass', { replace: true });
+    },
     resetProfile: () => {
       if (confirm('Reset your level, stats and unlocks? This cannot be undone.')) {
         progression.reset();
@@ -926,6 +960,8 @@ export class UI {
   };
 
   leaveMatchSilently() {
+    this.endFx?.dispose();
+    this.endFx = null;
     this.matchToken++;
     this.game.setSession(null);
     this.inMatch = false;
@@ -945,21 +981,22 @@ export class UI {
         <button class="btn menu-item" data-action="practice"><span class="t">Practice</span></button>
         <button class="btn menu-item" data-action="friendsScreen"><span class="t">Friends</span><span class="badge ready friends-online"></span></button>
         <button class="btn menu-item" data-action="goto" data-target="abilities"><span class="t">Abilities</span><span class="coin-chip">${COIN_SVG}${progression.coins}</span></button>
+        <button class="btn menu-item pass-item" data-action="goto" data-target="pass"><span class="t">★ Battle Pass</span><span class="pass-chip">Tier ${BP.tierOf(progression.pass.xp).tier}${BP.claimable(p).length ? ` · <b>${BP.claimable(p).length} to claim</b>` : ''}</span></button>
         <button class="btn menu-item" data-action="goto" data-target="customise"><span class="t">Customise</span></button>
         <button class="btn menu-item" data-action="goto" data-target="profile"><span class="t">Profile</span></button>
         <button class="btn menu-item" data-action="goto" data-target="settings"><span class="t">Settings</span></button>
         <button class="btn menu-item" data-action="goto" data-target="controls"><span class="t">Controls</span></button>
         <button class="btn menu-item" data-action="goto" data-target="updates"><span class="t">What's new</span>${loadJSON('lastSeenVersion', null) !== VERSION ? '<span class="badge new-inline">NEW</span>' : `<span class="ver-chip">v${VERSION}</span>`}</button>
-        <button class="btn menu-item" data-action="goto" data-target="credits"><span class="t">Credits</span></button>
       </div>
       <div class="player-card panel">
         <div class="label">Player</div>
         <div class="row between"><div class="name">${esc(settings.data.player.name)}</div><div class="badge you">LVL ${p.level}</div></div>
+        ${p.cosmetics.title && p.cosmetics.title !== 'none' && TITLES[p.cosmetics.title] ? `<div class="ptitle">${esc(TITLES[p.cosmetics.title].name)}</div>` : ''}
         <div class="xpbar"><i style="width:${Math.round((p.xp / need) * 100)}%"></i></div>
         <div class="row between" style="margin-top:6px;font-size:12px;color:var(--muted)"><span>${p.xp} / ${need} XP</span><span>${p.stats.wins} wins · ${p.stats.tags} tags</span></div>
         <div class="row between" style="margin-top:8px"><span class="coin-chip big">${COIN_SVG}${progression.coins}</span><span class="loadout-mini">${progression.loadout.map((id, i) => `<i title="${id ? ABILITY_INFO[id] && getConfig().abilities[id].name : 'Empty slot'}" style="--c:${id ? ABILITY_INFO[id].color : '#555'}">${id ? abilityIcon(id) : ''}<b>${i ? 'R' : 'F'}</b></i>`).join('')}</span></div>
       </div>
-      <div class="version">PRO TAG v${VERSION} · ${esc(this.game.glInfo || '')}</div>
+      <div class="version">PRO TAG v${VERSION} · <button class="link-btn" data-action="goto" data-target="credits">Credits</button> · ${esc(this.game.glInfo || '')}</div>
     </div>`;
   }
 
@@ -1078,7 +1115,7 @@ export class UI {
       const mine = p.id === this.net.id;
       const addBtn = !mine && p.tag && !friends.isFriend(p.tag) ? `<button class="btn small ghost" data-action="addFriendTag" data-tag="${esc(p.tag)}" data-name="${esc(p.name)}" title="Add as friend"><span class="t">+ Friend</span></button>` : '';
       const kickBtn = isHost && !mine ? `<button class="btn small danger" data-action="kick" data-id="${esc(p.id)}" data-name="${esc(p.name)}" title="Remove from lobby"><span class="t">Kick</span></button>` : '';
-      return `<div class="prow"><span class="dot" style="background:${esc(p.cosm?.primary || '#888')}"></span><span class="pname">${esc(p.name)} <span class="tagcode">#${esc(p.tag || '')}</span></span>${p.id === room.host ? '<span class="badge host">Host</span>' : ''}${mine ? '<span class="badge you">You</span>' : ''}${p.connected === false ? '<span class="badge wait">Reconnecting</span>' : ''}<span class="badge ${p.ready ? 'ready' : 'wait'}">${p.ready ? 'Ready' : 'Not ready'}</span>${addBtn}${kickBtn}</div>`;
+      return `<div class="prow"><span class="dot" style="background:${esc(p.cosm?.primary || '#888')}"></span><span class="pname">${esc(p.name)} <span class="tagcode">#${esc(p.tag || '')}</span>${TITLES[p.cosm?.title] && p.cosm.title !== 'none' ? `<span class="ptitle">${esc(TITLES[p.cosm.title].name)}</span>` : ''}</span>${p.id === room.host ? '<span class="badge host">Host</span>' : ''}${mine ? '<span class="badge you">You</span>' : ''}${p.connected === false ? '<span class="badge wait">Reconnecting</span>' : ''}<span class="badge ${p.ready ? 'ready' : 'wait'}">${p.ready ? 'Ready' : 'Not ready'}</span>${addBtn}${kickBtn}</div>`;
     };
     return `
     <div class="screen center dim">
@@ -1303,11 +1340,17 @@ export class UI {
     const me = r.ranking.find((x) => x.id === m.localId);
     const won = r.winners.includes(m.localId);
     const winnersNames = r.ranking.filter((x) => x.winner).map((x) => x.name);
-    let headline = won ? 'Victory!' : 'Defeat';
-    if (r.mode === 'infection') headline = r.team === 'runners' ? (won ? 'You survived!' : 'Runners win') : won ? 'Infection wins!' : 'You were infected';
-    if (r.mode === 'hotpotato') headline = won ? 'Last one standing!' : me?.out ? 'You exploded' : 'Defeat';
+    let headline = won ? 'You won the match' : 'Better luck next time';
+    if (r.mode === 'infection') headline = r.team === 'runners' ? (won ? 'You survived the infection!' : 'The runners held out') : won ? 'The infection spread to everyone' : 'You were infected';
+    if (r.mode === 'hotpotato') headline = won ? 'Last one standing!' : me?.out ? 'You exploded' : 'The potato got you';
+    if (r.mode === 'elimination' || r.mode === 'zone') headline = won ? 'Last runner standing!' : me?.out ? 'You were knocked out' : 'So close';
     const p = progression.profile;
-    const need = xpForLevel(p.level, getConfig().progression);
+    const cfg = getConfig();
+    const need = xpForLevel(p.level, cfg.progression);
+    const xpBefore = m.prog.levelsGained ? 0 : Math.max(0, p.xp - m.award.total);
+    const session = this.game.session;
+    const colorOf = (id) => session?.players?.get(id)?.cosmetics?.primary || '#8a93a6';
+    const stat = (x) => (r.mode === 'classic' ? `${formatSeconds(x.itTime)} as IT` : r.mode === 'hotpotato' ? (x.out ? 'Exploded' : 'Survived') : `${x.tags} tag${x.tags === 1 ? '' : 's'}`);
     const cols = r.mode === 'classic' ? ['Tags', 'Time as IT', 'Survived'] : r.mode === 'infection' ? ['Tags', 'Survived', 'Status'] : r.mode === 'hotpotato' ? ['Passes', 'Held the potato', 'Status'] : ['Eliminations', 'Survived', 'Status'];
     const rowCells = (x) => {
       if (r.mode === 'classic') return `<td>${x.tags}</td><td>${formatSeconds(x.itTime)}</td><td>${formatSeconds(x.survival)}</td>`;
@@ -1315,50 +1358,85 @@ export class UI {
       const status = x.it ? (r.mode === 'infection' ? 'Infected' : 'Hunter') : x.out ? 'Eliminated' : 'Survived';
       return `<td>${x.tags}</td><td>${formatSeconds(x.survival)}</td><td>${status}</td>`;
     };
+    // podium: 2nd, 1st, 3rd
+    const top = r.ranking.slice(0, 3);
+    const order = [top[1], top[0], top[2]];
+    const podium = order.map((x, i) => {
+      if (!x) return '<div class="pod empty"></div>';
+      const place = x.place;
+      const h = place === 1 ? 108 : place === 2 ? 78 : 56;
+      const d = [0.55, 0.85, 0.35][i];
+      return `<div class="pod p${place} ${x.id === m.localId ? 'me' : ''}" style="--c:${esc(colorOf(x.id))};--h:${h}px;--d:${d}s">
+        <div class="pod-av">${place === 1 ? '<i class="pod-crown">👑</i>' : ''}</div>
+        <div class="pod-name">${esc(x.name)}</div>
+        <div class="pod-stat">${esc(stat(x))}</div>
+        <div class="pod-block"><span>${place}</span></div>
+      </div>`;
+    }).join('');
     return `
-    <div class="screen center dim solid">
-      <div class="page" style="max-width:980px">
-        <div class="grid2" style="grid-template-columns:1.4fr 1fr">
-          <div class="panel">
-            <div class="label">${getConfig().modes[r.mode]?.name} · ${this._mapName(m.opts?.mapId)} · ${formatSeconds(r.duration)}</div>
-            <h2 class="winner-banner" style="color:${won ? 'var(--sun)' : 'var(--text)'}">${headline}</h2>
-            <p class="subtitle" style="margin-top:8px">Winner${winnersNames.length > 1 ? 's' : ''}: <b style="color:var(--text)">${esc(winnersNames.join(', ') || '—')}</b></p>
+    <div class="screen results-screen ${won ? 'win' : 'lose'}">
+      <div class="rs-wrap">
+        <header class="rs-head">
+          <div class="rs-meta">${esc(cfg.modes[r.mode]?.name || r.mode)} · ${esc(this._mapName(m.opts?.mapId))} · ${formatSeconds(r.duration)}</div>
+          <h1 class="rs-title" data-text="${won ? 'VICTORY' : 'DEFEAT'}">${won ? 'VICTORY' : 'DEFEAT'}</h1>
+          <div class="rs-sub"><b>${esc(headline)}</b>${me ? ` · You placed <b>#${me.place}</b> of ${r.ranking.length}` : ''} · Winner${winnersNames.length > 1 ? 's' : ''}: ${esc(winnersNames.join(', ') || '—')}</div>
+        </header>
+        <div class="rs-grid">
+          <section class="rs-card rs-podium" style="--d:0.15s">
+            <div class="podium">${podium}</div>
             <table class="results">
               <tr><th>#</th><th>Player</th>${cols.map((c) => `<th>${c}</th>`).join('')}</tr>
-              ${r.ranking.map((x) => `<tr class="${x.id === m.localId ? 'me' : ''} ${x.winner ? 'winner' : ''}"><td>${x.place}</td><td>${esc(x.name)}${x.connected ? '' : ' <span class="badge wait">left</span>'}</td>${rowCells(x)}</tr>`).join('')}
+              ${r.ranking.map((x, n) => `<tr class="${x.id === m.localId ? 'me' : ''} ${x.winner ? 'winner' : ''}" style="--n:${n}"><td>${x.place}</td><td><span class="rs-dot" style="background:${esc(colorOf(x.id))}"></span>${esc(x.name)}${x.connected ? '' : ' <span class="badge wait">left</span>'}</td>${rowCells(x)}</tr>`).join('')}
             </table>
-          </div>
-          <div class="stack">
-            <div class="panel">
-              <div class="label">Your match</div>
-              <div class="stat-grid" style="grid-template-columns:repeat(2,1fr);margin-top:10px">
-                <div class="stat"><div class="v">${me ? `#${me.place}` : '—'}</div><div class="k">Place</div></div>
-                <div class="stat"><div class="v">${me?.tags ?? 0}</div><div class="k">Tags</div></div>
-                <div class="stat"><div class="v">${me ? formatSeconds(me.survival) : '—'}</div><div class="k">Survived</div></div>
-                <div class="stat"><div class="v">${me ? formatSeconds(me.itTime) : '—'}</div><div class="k">Time as IT</div></div>
-              </div>
+          </section>
+          <section class="rs-side">
+            <div class="rs-card rs-stats" style="--d:0.25s">
+              <div class="rs-tile"><b data-count="${me?.place ?? 0}" data-pre="#">#0</b><span>Place</span></div>
+              <div class="rs-tile"><b data-count="${me?.tags ?? 0}" data-delay="100">0</b><span>Tags</span></div>
+              <div class="rs-tile"><b>${me ? formatSeconds(me.survival) : '—'}</b><span>Survived</span></div>
+              <div class="rs-tile"><b>${me ? formatSeconds(me.itTime) : '—'}</b><span>Time as IT</span></div>
             </div>
-            <div class="panel">
-              <div class="row between"><div class="label">XP earned</div><b style="color:var(--lime);font-size:20px">+${m.award.total}</b></div>
-              <div class="xp-lines" style="margin:10px 0">${m.award.parts.map(([k, v]) => `<div><span>${esc(k)}</span><b>+${v}</b></div>`).join('')}</div>
-              <div class="row between" style="font-size:13px"><span>Level ${p.level}${m.prog.levelsGained ? ' <span class="badge ready">LEVEL UP</span>' : ''}</span><span style="color:var(--muted)">${p.xp}/${need}</span></div>
-              <div class="xpbar"><i style="width:${Math.round((p.xp / need) * 100)}%"></i></div>
-              ${m.online ? '<div class="label" style="margin-top:10px;color:var(--dim)">XP and coins awarded by the server</div>' : ''}
+            <div class="rs-card rs-xp" style="--d:0.35s">
+              <div class="row between"><div class="label">XP earned</div><b class="rs-big xp" data-count="${m.award.total}" data-pre="+" data-delay="300">+0</b></div>
+              <div class="rs-lines">${m.award.parts.map(([k, v], i) => `<div style="--n:${i}"><span>${esc(k)}</span><b>+${v}</b></div>`).join('')}</div>
+              <div class="row between" style="font-size:13px"><span>Level ${p.level}${m.prog.levelsGained ? ' <span class="badge ready lvl-up">LEVEL UP!</span>' : ''}</span><span style="color:var(--muted)">${p.xp}/${need}</span></div>
+              <div class="xpbar rs-bar"><i style="width:${Math.round((xpBefore / need) * 100)}%" data-fill="${Math.round((p.xp / need) * 100)}"></i></div>
+              ${m.online ? '<div class="label" style="margin-top:8px;color:var(--dim)">XP and coins awarded by the server</div>' : ''}
             </div>
-            <div class="panel">
-              <div class="row between"><div class="label">Coins earned</div><b class="coin-chip big">${COIN_SVG}+${m.award.coins || 0}</b></div>
-              <div class="xp-lines coin-lines" style="margin:10px 0">${(m.award.coinParts || []).map(([k, v]) => `<div><span>${esc(k)}</span><b>+${v}</b></div>`).join('')}</div>
+            ${this._passResults(m.prog?.pass)}
+            <div class="rs-card rs-coins" style="--d:0.55s">
+              <div class="row between"><div class="label">Coins earned</div><b class="rs-big coin">${COIN_SVG}<span data-count="${m.award.coins || 0}" data-pre="+" data-delay="600">+0</span></b></div>
+              <div class="rs-lines coin-lines">${(m.award.coinParts || []).map(([k, v], i) => `<div style="--n:${i}"><span>${esc(k)}</span><b>+${v}</b></div>`).join('')}</div>
               <div class="row between" style="font-size:13px"><span>Balance: <b style="color:var(--sun)">${progression.coins}</b></span>${this._affordable() ? '<span class="badge host">Something new is affordable!</span>' : ''}</div>
             </div>
-            <div class="stack">
-              <button class="btn primary" data-action="rematch"><span class="t">${m.online ? 'Ready for rematch' : 'Rematch'}</span></button>
+            <div class="rs-actions" style="--d:0.7s">
+              <button class="btn primary rs-rematch" data-action="rematch"><span class="t">${m.online ? 'Ready for rematch' : 'Rematch'}</span></button>
               ${m.online ? '<button class="btn" data-action="toLobby"><span class="t">Return to lobby</span></button>' : '<button class="btn" data-action="toPlayMenu"><span class="t">Change mode / arena</span></button>'}
               ${m.online ? '' : '<button class="btn" data-action="goto" data-target="abilities"><span class="t">Ability shop</span></button>'}
               <button class="btn ghost" data-action="toMenu"><span class="t">Main menu</span></button>
             </div>
-          </div>
+          </section>
         </div>
       </div>
+    </div>`;
+  }
+
+  bind_results() {
+    animateResults(this.root);
+  }
+
+  /** Battle Pass panel on the results screen. */
+  _passResults(res) {
+    if (!res) return '';
+    const { tier, into, need } = BP.tierOf(progression.pass.xp);
+    const up = res.tiersAfter - res.tiersBefore;
+    const before = up > 0 ? 0 : Math.max(0, into - res.xp);
+    return `<div class="rs-card pass-result" style="--d:0.45s">
+      <div class="row between"><div class="label">★ Battle Pass</div><b class="rs-big pass" data-count="${res.xp}" data-pre="+" data-delay="450">+0</b></div>
+      ${res.completed.map((c, i) => `<div class="pass-done" style="--n:${i}">✓ ${esc(c.text)} <b>+${c.xp}</b></div>`).join('')}
+      <div class="row between" style="font-size:13px;margin-top:8px"><span>Tier ${tier}${up > 0 ? ` <span class="badge ready lvl-up">+${up} TIER${up > 1 ? 'S' : ''}</span>` : ''}</span><span style="color:var(--muted)">${tier >= BP.TIERS ? 'Complete' : `${into}/${need}`}</span></div>
+      <div class="xpbar pass-bar rs-bar"><i style="width:${Math.round((before / need) * 100)}%" data-fill="${Math.round((into / need) * 100)}"></i></div>
+      ${BP.claimable(progression.profile).length ? '<button class="btn small" data-action="goto" data-target="pass" style="margin-top:10px"><span class="t">Rewards to claim →</span></button>' : ''}
     </div>`;
   }
 
@@ -1453,7 +1531,8 @@ export class UI {
             <div class="label" style="margin-top:16px">Headwear</div>${cardSet('hat', HATS)}
             <div class="label" style="margin-top:16px">Trail</div>${cardSet('trail', TRAILS)}
             <div class="label" style="margin-top:16px">Tag effect</div>${cardSet('tagEffect', TAG_EFFECTS)}
-            <div class="label" style="margin-top:16px">Emotes <span style="color:var(--dim)">(keys 1–6)</span></div>
+            <div class="label" style="margin-top:16px">Title</div>${cardSet('title', TITLES)}
+            <div class="label" style="margin-top:16px">Emotes <span style="color:var(--dim)">(keys 1–9, 0)</span></div>
             <div class="cards">${EMOTE_IDS.map((id, i) => {
               const e = EMOTES[id];
               const ok = isUnlocked(e.unlock, prof);
@@ -1575,7 +1654,7 @@ export class UI {
             <div class="cg"><span>Dodge</span><span>${k('dodge')}</span></div>
             <div class="cg"><span>Vault / climb</span><span>${k('vault')}</span></div>
             <div class="cg"><span>Ability slot 1 / 2</span><span>${k('ability1')} ${k('ability2')}</span></div>
-            <div class="cg"><span>Emotes</span><span>${k('emote1')} ${k('emote2')} ${k('emote3')} ${k('emote4')} ${k('emote5')} ${k('emote6')}</span></div>
+            <div class="cg"><span>Emotes</span><span>${['emote1', 'emote2', 'emote3', 'emote4', 'emote5', 'emote6', 'emote7', 'emote8', 'emote9', 'emote10'].map(k).join(' ')}</span></div>
             <div class="cg"><span>Scoreboard</span><span>${k('scoreboard')}</span></div>
             <div class="cg"><span>Practice: swap IT</span><span>${k('swapIt')}</span></div>
             <div class="cg"><span>Pause</span><span>${k('pause')}</span></div>
@@ -1632,6 +1711,120 @@ export class UI {
         ${older.map((u) => `<details class="cl-old"><summary><b>v${esc(u.version)}</b> · ${esc(u.title)} <span>${esc(u.date)}</span></summary>${u.sections.map(section).join('')}</details>`).join('')}
       </div>
     </div>`;
+  }
+
+  // ------------------------------------------------------------------ battle pass
+  /** Icon, name and kind of a pass reward ({ coins } or { item: 'kind:id' }). */
+  _reward(r) {
+    if (r.coins) return { icon: COIN_SVG, name: `${r.coins} coins`, kind: 'Coins' };
+    const [kind, id] = r.item.split(':');
+    if (kind === 'color') {
+      const col = COLORS.find((c) => c.id === id);
+      return { icon: `<span class="pr-swatch" style="background:${col?.hex || '#888'}"></span>`, name: `${id[0].toUpperCase()}${id.slice(1)} colour`, kind: 'Colour' };
+    }
+    const cat = { hat: [HATS, '🧢', 'Headwear'], emote: [EMOTES, '💃', 'Emote'], trail: [TRAILS, '✨', 'Trail'], tagfx: [TAG_EFFECTS, '💥', 'Tag effect'], title: [TITLES, '🏷️', 'Title'] }[kind];
+    return { icon: `<span class="pr-emoji">${cat?.[1] || '🎁'}</span>`, name: cat?.[0][id]?.name || id, kind: cat?.[2] || 'Item' };
+  }
+
+  screen_pass() {
+    const prof = progression.profile;
+    const pass = progression.pass;
+    const { tier, into, need } = BP.tierOf(pass.xp);
+    const left = Math.max(0, Date.parse(BP.SEASON.ends) - Date.now());
+    const days = Math.ceil(left / 86400000);
+    const over = BP.seasonOver();
+    const ready = BP.claimable(prof);
+    const price = BP.SEASON.premiumPrice;
+    const cell = (t, track) => {
+      const r = BP.SEASON.rewards[t - 1][track];
+      const info = this._reward(r);
+      const claimed = pass.claimed[track].includes(t);
+      const can = BP.canClaim(prof, track, t);
+      const locked = track === 'premium' && !pass.premium;
+      const state = claimed ? 'claimed' : can ? 'ready' : t <= tier && !locked ? 'ready' : 'locked';
+      return `<div class="pr ${track} ${state} ${locked ? 'nopremium' : ''}" title="${esc(info.kind)}: ${esc(info.name)}">
+        <div class="pr-ico">${info.icon}</div>
+        <div class="pr-name">${esc(info.name)}</div>
+        <div class="pr-kind">${esc(info.kind)}</div>
+        ${claimed ? '<div class="pr-state">✓ Claimed</div>' : can ? `<button class="btn small primary" data-action="claimPass" data-track="${track}" data-tier="${t}"><span class="t">Claim</span></button>` : `<div class="pr-state">${locked ? '🔒 Premium' : `Tier ${t}`}</div>`}
+      </div>`;
+    };
+    const cols = BP.SEASON.rewards.map((_, i) => {
+      const t = i + 1;
+      return `<div class="tier-col ${t <= tier ? 'reached' : ''} ${t === tier + 1 ? 'next' : ''}" data-tier="${t}"><div class="tnum">${t}</div>${cell(t, 'free')}${cell(t, 'premium')}</div>`;
+    }).join('');
+    const now = Date.now();
+    const nextDay = (BP.dayKey(now) + 1) * 86400000 + new Date(now).getTimezoneOffset() * 60000;
+    const hrs = Math.max(1, Math.ceil((nextDay - now) / 3600000));
+    const nextWeekDays = 7 - ((BP.dayKey(now) + 3) % 7);
+    const chList = (set, kind) => set.list.map((ch) => {
+      const def = BP.challengeDef(ch.id);
+      const pct = Math.round((ch.progress / def.n) * 100);
+      const shown = def.stat === 'survival' ? `${Math.floor(ch.progress / 60)}:${String(ch.progress % 60).padStart(2, '0')} / ${def.n / 60}:00` : `${ch.progress} / ${def.n}`;
+      return `<div class="ch ${ch.done ? 'done' : ''}"><div class="row between"><span>${ch.done ? '✓ ' : ''}${esc(def.text)}</span><b>+${BP.CHALLENGE_XP[kind]} XP</b></div><div class="xpbar"><i style="width:${pct}%"></i></div><div class="ch-n">${shown}</div></div>`;
+    }).join('');
+    return `
+    <div class="screen center dim solid">
+      <button class="btn ghost small back-btn" data-action="back"><span class="t">← Back</span></button>
+      <div class="page pass-page" style="max-width:1120px">
+        <div class="pass-head">
+          <div>
+            <div class="label">Battle Pass · Season ${BP.SEASON.number}</div>
+            <h2 class="title">${esc(BP.SEASON.name)}</h2>
+            <p class="subtitle">${over ? 'This season has ended. A new one arrives with the next update.' : `Ends in ${days} day${days === 1 ? '' : 's'} · every match gives pass XP, and challenges give lots more.`}</p>
+          </div>
+          <div class="pass-tier"><span>Tier</span><b>${tier}</b><span>of ${BP.TIERS}</span></div>
+        </div>
+        <div class="pass-progress">
+          <div class="xpbar big"><i style="width:${Math.round((into / need) * 100)}%"></i></div>
+          <span>${tier >= BP.TIERS ? 'Pass complete!' : `${into} / ${need} XP to tier ${tier + 1}`}</span>
+        </div>
+        <div class="pass-actions">
+          ${pass.premium
+            ? '<span class="badge ready premium-badge">★ PREMIUM UNLOCKED</span>'
+            : `<button class="btn small ${progression.coins >= price ? 'primary' : ''}" data-action="buyPremium" ${progression.coins >= price ? '' : 'disabled'}><span class="t">★ Unlock Premium · ${COIN_SVG} ${price}${progression.coins >= price ? '' : ` (need ${price - progression.coins} more)`}</span></button>
+               <span class="pass-note">Premium adds a second reward on every tier (the Neon Crown, the Moonwalk, a trail, a tag effect…) and pays back over 1,300 coins. Bought with coins you earn by playing, never real money.</span>`}
+          ${ready.length ? `<button class="btn small primary claim-all" data-action="claimAllPass"><span class="t">Claim all (${ready.length})</span></button>` : ''}
+        </div>
+        <div class="pass-track-wrap">
+          <div class="track-labels"><div></div><div>Free</div><div>★ Premium</div></div>
+          <div class="pass-track" id="pass-track">${cols}</div>
+        </div>
+        <div class="grid2 pass-challenges">
+          <div class="panel"><div class="row between"><div class="label">Daily challenges</div><span class="pass-reset">New in ${hrs} h</span></div>${chList(pass.daily, 'daily')}</div>
+          <div class="panel"><div class="row between"><div class="label">Weekly challenges</div><span class="pass-reset">New in ${nextWeekDays} day${nextWeekDays === 1 ? '' : 's'}</span></div>${chList(pass.weekly, 'weekly')}</div>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  bind_pass() {
+    const track = this.root.querySelector('#pass-track');
+    if (!track) return;
+    if (this._passScroll != null) track.scrollLeft = this._passScroll;
+    else {
+      const next = track.querySelector('.tier-col.next') || track.querySelector('.tier-col.reached:last-of-type');
+      if (next) track.scrollLeft = Math.max(0, next.offsetLeft - track.clientWidth / 2 + next.clientWidth / 2);
+    }
+    track.addEventListener('scroll', () => (this._passScroll = track.scrollLeft), { passive: true });
+    // mouse wheel scrolls the track sideways
+    track.addEventListener('wheel', (e) => {
+      if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+        track.scrollLeft += e.deltaY;
+        e.preventDefault();
+      }
+    }, { passive: false });
+  }
+
+  _claimed(rewards) {
+    if (!rewards.length) return;
+    audio.play('unlock');
+    const items = rewards.filter((r) => r.item).map((r) => this._reward(r).name);
+    const coins = rewards.reduce((a, r) => a + (r.coins || 0), 0);
+    const parts = [];
+    if (items.length) parts.push(items.join(', '));
+    if (coins) parts.push(`${coins} coins`);
+    this.toast(`Claimed: ${parts.join(' + ')}${items.length ? ' — equip new items in Customise' : ''}`, 'good');
   }
 
   screen_credits() {

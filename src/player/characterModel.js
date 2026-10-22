@@ -848,6 +848,54 @@ export class CharacterModel {
       J.ankleL.set(0.15); J.ankleR.set(0.15);
       return { rootY: -0.07 + Math.abs(Math.sin(t * 12)) * 0.05, lambda: 30 };
     }
+    if (this.emote === 'salute') {
+      // stand to attention, right hand to the brow
+      const k = Math.min(1, t * 5);
+      J.spine.set(-0.06, 0, 0);
+      J.head.set(-0.12 * k, 0, 0);
+      J.shoulderR.set(-1.35 * k, 0, -1.05 * k); J.elbowR.set(-2.35 * k);
+      J.shoulderL.set(0, 0, 0.06); J.elbowL.set(-0.05);
+      J.hipL.set(0, 0, 0.02); J.hipR.set(0, 0, -0.02);
+      return { lambda: 22 };
+    }
+    if (this.emote === 'chicken') {
+      // chicken dance: flapping wings, pecking head, knees bobbing
+      const f = Math.sin(t * 13);
+      J.shoulderL.set(-0.2, 0, 0.55 + f * 0.45); J.elbowL.set(-2.3);
+      J.shoulderR.set(-0.2, 0, -0.55 - f * 0.45); J.elbowR.set(-2.3);
+      J.neck.set(0.25 + Math.max(0, Math.sin(t * 6.5)) * 0.45);
+      J.spine.set(0.3, Math.sin(t * 3.2) * 0.25, 0);
+      J.hips.set(0, 0, Math.sin(t * 6.5) * 0.12);
+      J.kneeL.set(0.5 + Math.max(0, Math.sin(t * 6.5)) * 0.3); J.kneeR.set(0.5 + Math.max(0, -Math.sin(t * 6.5)) * 0.3);
+      J.hipL.set(-0.25, 0, 0.18); J.hipR.set(-0.25, 0, -0.18);
+      return { rootY: -0.12 + Math.abs(Math.sin(t * 6.5)) * 0.04, lambda: 24 };
+    }
+    if (this.emote === 'chill') {
+      // sit down cross-legged, lean back on the hands, look around
+      const k = Math.min(1, t * 2.2);
+      J.hips.set(-0.15 * k, 0, 0);
+      J.spine.set(-0.25 * k, 0, 0);
+      J.neck.set(0.1); J.head.set(0, Math.sin(t * 0.8) * 0.5 * k, 0);
+      J.hipL.set(-1.45 * k, 0, 0.75 * k); J.kneeL.set(2.3 * k); J.ankleL.set(0.4 * k);
+      J.hipR.set(-1.45 * k, 0, -0.75 * k); J.kneeR.set(2.3 * k); J.ankleR.set(0.4 * k);
+      J.shoulderL.set(0.55 * k, 0, 0.35 * k); J.elbowL.set(-0.15);
+      J.shoulderR.set(0.55 * k, 0, -0.35 * k); J.elbowR.set(-0.15);
+      return { rootY: -0.74 * k, lambda: 10 };
+    }
+    if (this.emote === 'moonwalk') {
+      // gliding on the spot: one foot flat sliding back, the other up on its toes
+      const p = (t * 1.6) % 1;
+      const left = Math.floor(t * 1.6) % 2 === 0;
+      const slide = Math.sin(p * Math.PI);
+      const flat = (hip, knee, ankle, out) => { hip.set(0.35 * slide - 0.1, 0, out); knee.set(0.05); ankle.set(0); };
+      const toes = (hip, knee, ankle, out) => { hip.set(-0.15, 0, out); knee.set(0.75); ankle.set(0.75); };
+      if (left) { flat(J.hipL, J.kneeL, J.ankleL, 0.04); toes(J.hipR, J.kneeR, J.ankleR, -0.04); }
+      else { flat(J.hipR, J.kneeR, J.ankleR, -0.04); toes(J.hipL, J.kneeL, J.ankleL, 0.04); }
+      J.spine.set(0.08, 0, 0); J.head.set(0.05, 0, 0);
+      J.shoulderL.set(0.2 + slide * 0.2, 0, 0.12); J.elbowL.set(-0.6);
+      J.shoulderR.set(0.2 + (1 - slide) * 0.2, 0, -0.12); J.elbowR.set(-0.6);
+      return { rootY: -0.05, lambda: 18 };
+    }
     if (this.emote === 'robot') {
       // the robot: snappy, quantised poses
       const q = Math.floor(t / 0.36) % 6;
@@ -905,7 +953,7 @@ export class CharacterModel {
 
 const SHARED_GEOS = new Set(Object.values(sharedGeo));
 /** How long each emote plays (seconds) unless the player moves. */
-export const EMOTE_TIME = { wave: 2.6, dance: 3.2, flex: 2.2, griddy: 4.2, buggin: 3.6, robot: 3.6 };
+export const EMOTE_TIME = { wave: 2.6, dance: 3.2, flex: 2.2, griddy: 4.2, buggin: 3.6, robot: 3.6, salute: 2.2, chicken: 3.6, chill: 8, moonwalk: 4 };
 
 function disposeTree(obj) {
   obj.traverse((o) => {

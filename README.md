@@ -2,9 +2,11 @@
 
 A fast 3D parkour tag game. Vault, slide, mantle, wall-jump and dodge across seven arenas, from neon rooftops to an overgrown abandoned mall, a giant waterpark and a toy factory. Play six modes (including Hot Potato and Shrinking Zone) offline against bots, or online against friends through the included authoritative server.
 
-**Current version: v1.03.** The first time you open a new version, a *What's new* screen lists the changes (you can reopen it from the main menu).
+**Current version: v1.05.** The first time you open a new version, a *What's new* screen lists the changes (you can reopen it from the main menu).
 
 Every match opens with a short cutscene: the camera circles the arena with its name, the mode and who's playing, then swoops down behind you for the countdown. Any key or a click skips it.
+
+And every match ends with one: **VICTORY** slams onto the screen letter by letter in gold, with an impact shake, light rays and confetti cannons, or **DEFEAT** crashes down and cracks with a red glitch and drifting ash. Meanwhile the camera circles the winner, who keeps dancing behind the results screen: a podium for the top three, then your stats, XP, Battle Pass XP and coins counting up. *Reduce flashing* turns the shake and flashes off.
 
 **No installation beyond Python.** The game runs in any modern browser (Chrome, Edge or Firefox). The server is plain Python 3 with no `pip install`.
 
@@ -90,7 +92,7 @@ Online, the server schedules the events so everyone gets the same one at the sam
 | Dodge | Q or right mouse | LB | Dodge button |
 | Vault / climb | E (also automatic) | X | Vault button |
 | Ability slot 1 / 2 | F / R | Y / RT | Ability buttons (show the equipped icons) |
-| Emotes: wave, groove, flex, Griddy, Buggin', robot | 1 – 6 | D-pad ↑ ← →, R3 cycles the new ones | — |
+| Emotes: wave, groove, flex, Griddy, Buggin', robot, then the Battle Pass ones (salute, chicken dance, chill, moonwalk) | 1 – 9, 0 | D-pad ↑ ← →, R3 cycles Griddy / Buggin' / robot | — |
 | Scoreboard | Tab | View | — |
 | Practice: swap IT | T | D-pad ↓ | — |
 | Pause | Esc / P | Menu | ❚❚ |
@@ -205,9 +207,18 @@ Everything in Settings changes the real game and is saved on your device:
 
 On first launch the game picks a preset to suit your GPU.
 
+## Battle Pass
+
+**Season 1: Glitch Season** (main menu → ★ Battle Pass) has 30 tiers of 300 pass XP. Every match gives its XP to the pass too, and challenges give a lot more: **3 daily** (+150 XP each, new every day) and **4 weekly** (+600 XP each, new every Monday), the same for every player, like "Tag 5 runners", "Ride 2 water slides", "Scramble 8 players" or "Play a Hot Potato match".
+
+- **Free track** (everyone): coins, the Party Hat, Cat Ears, the Salute and Chill emotes, new colours, titles and the Golden Cap at tier 30.
+- **Premium track**: unlocked for **600 coins earned by playing**. There's no real money anywhere in PRO TAG. It adds a second reward on every tier: the Traffic Cone, Glitch Visor, Propeller Cap and Neon Crown, the Chicken Dance and the Moonwalk, the Glitch and Gold Rush trails, the Glitch Burst and Fireworks tag effects, more colours and titles, and 1,350 coins back. Buying it late is fine: every tier you've already reached becomes claimable.
+- **Claim** rewards on the pass screen (or *Claim all*), then equip them in Customise. **Titles** show under your name on the menu and in lobbies.
+- The results screen shows the pass XP you earned and any challenges you finished. Progress is stored on your device, like your level and coins. When a new season arrives, the pass starts again, but everything you claimed stays yours.
+
 ## Progression
 
-You earn XP and coins for every match. The results screen breaks both down. XP comes from participation, tags, survival time, wins, and a top-3 bonus. Levels unlock cosmetics: suit (shell), trim (joints) and accent colours, 10 hats, trails, tag effects and emotes (the Griddy and Buggin' are free for everyone; the robot unlocks at level 8). Some unlock through achievements (wins, lifetime tags, total survival time). Cosmetics never change gameplay. Coins buy abilities (see above). The Profile screen shows lifetime stats and recent matches. Everything is earned by playing: there is no real-money shop and no loot boxes.
+You earn XP and coins for every match. The results screen breaks both down. XP comes from participation, tags, survival time, wins, and a top-3 bonus. Levels unlock cosmetics: suit (shell), trim (joints) and accent colours, 10 hats, trails, tag effects and emotes (the Griddy and Buggin' are free for everyone; the robot unlocks at level 8). Some unlock through achievements (wins, lifetime tags, total survival time). Cosmetics never change gameplay. Coins buy abilities (see above). The Profile screen shows lifetime stats and recent matches. Everything is earned by playing, the Battle Pass included: there is no real-money shop and no loot boxes.
 
 ---
 
@@ -235,9 +246,9 @@ src/
   effects/      pooled particles, rings, trails, lightning, perfect-dodge cinematic,
                 screen shader, ability effects, shrinking-zone wall (zoneFx.js), motion blur (motionBlur.js)
   audio/        synthesised SFX engine + procedural music sequencer
-  progression/  XP/levels/stats, cosmetics catalogue
+  progression/  XP/levels/stats, cosmetics catalogue, Battle Pass (battlepass.js)
   ui/           menus (incl. the Abilities shop), HUD, touch controls, ability icons,
-                character preview, stylesheet
+                character preview, victory / defeat screens (endScreen.js), stylesheet
 server/         Python stdlib server: HTTP + RFC 6455 WebSocket, rooms, match loop,
                 rules (port of src/gameplay/rules.js), movement validation, map collision
 tools/build_maps.py     map source -> assets/maps/*.json (run after editing maps)
@@ -259,11 +270,11 @@ See **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for the technical design an
 ## Tests
 
 ```bash
-python -m unittest discover -s tests -v                      # 81 server, rules, integration, social, hosting, publishing, perfect-dodge, ability, coin, new-mode, map-event and map-feature tests
-# with the server running, open http://localhost:8080/tests/browser/   (140 browser tests)
+python -m unittest discover -s tests -v                      # 82 server, rules, integration, social, hosting, publishing, perfect-dodge, ability, coin, new-mode, map-event, map-feature and cosmetics tests
+# with the server running, open http://localhost:8080/tests/browser/   (150 browser tests)
 ```
 
-Latest results: **81/81 Python tests** and **140/140 browser tests** passing. Details, the manual verification checklist, and what could not be tested are in **[docs/TESTING.md](docs/TESTING.md)**.
+Latest results: **82/82 Python tests** and **150/150 browser tests** passing. Details, the manual verification checklist, and what could not be tested are in **[docs/TESTING.md](docs/TESTING.md)**.
 
 ## Requirements and performance
 
@@ -289,6 +300,7 @@ Also listed in [docs/TESTING.md](docs/TESTING.md#limitations).
 - **Progression is stored locally** in the browser, including coins and which abilities you own. Online XP and coins are computed by the server, but local storage can still be edited by the player, so this isn't tamper-proof persistence. Online, the server can't know what you *bought*; it enforces the loadout shape (2 slots, no duplicates), the cooldowns, and every ability's effect.
 - **Anti-cheat is practical, not perfect:** the server validates speed, teleports, solids and freeze, and checks tags with lag compensation, but it doesn't re-simulate full movement physics.
 - **Characters are built from procedural shapes** (sculpted shell plates and ball joints merged into one skinned mesh) and animated procedurally, emotes included; there are no authored or motion-captured models.
+- **The Battle Pass lives on your device**, like levels and coins: there are no accounts, so it doesn't follow you to another browser, and a player who edits their local storage could give themselves rewards. Cosmetics are visual only, so that can't affect anyone else's game.
 - **Scramble is applied by the victim's own game online.** The server decides who is hit and how, but a modified client could ignore it (the same goes for any client-side input effect).
 - **Not tested on real hardware here:** gamepads, physical touch devices, and real internet latency. Each is implemented to the standard browser APIs; see TESTING.md.
 - **There's no Exit button.** It isn't applicable in a browser: close the tab, or stop the server with Ctrl+C.

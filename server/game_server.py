@@ -36,7 +36,7 @@ CHAT_HISTORY = 40
 KICK_BAN_SECONDS = 120.0
 ROOM_NAME_RE = re.compile(r"[^\w\-' !?.]")
 ABILITY_IDS = ("blink", "rocket", "decoy", "grapple", "cloak", "shockwave", "scramble")
-EMOTE_IDS = ("wave", "dance", "flex", "griddy", "buggin", "robot")  # mirrors EMOTE_IDS in cosmetics.js
+EMOTE_IDS = ("wave", "dance", "flex", "griddy", "buggin", "robot", "salute", "chicken", "chill", "moonwalk")  # mirrors EMOTE_IDS in cosmetics.js
 SCRAMBLE_MODES = ("invert", "mirror", "spin")  # mirrors SCRAMBLE_MODES in abilities.js
 
 
@@ -100,7 +100,7 @@ def clean_cosmetics(c) -> dict:
         v = c.get(k)
         if isinstance(v, str) and HEX_RE.match(v):
             out[k] = v
-    for k in ("hat", "trail", "tagEffect"):
+    for k in ("hat", "trail", "tagEffect", "title"):
         v = c.get(k)
         if isinstance(v, str) and len(v) <= 24 and v.isidentifier():
             out[k] = v

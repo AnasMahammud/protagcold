@@ -151,6 +151,135 @@ export const HATS = {
       return h;
     },
   },
+  // ---- Battle Pass, Season 1 (unlock: { pass: 'hat:id' } = claimed from the pass)
+  cone: {
+    name: 'Traffic Cone',
+    unlock: { pass: 'hat:cone' },
+    build(THREE) {
+      const g = new THREE.Group();
+      const cone = new THREE.Mesh(new THREE.ConeGeometry(0.15, 0.4, 18), mat(THREE, '#ff7a1a', { roughness: 0.45 }));
+      cone.position.y = 0.16;
+      g.add(cone);
+      for (const [y, r] of [[0.1, 0.122], [0.22, 0.078]]) {
+        const band = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.94, r * 1.06, 0.05, 18), mat(THREE, '#f4f4f4', { roughness: 0.3 }));
+        band.position.y = y;
+        g.add(band);
+      }
+      const base = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.03, 0.3), mat(THREE, '#ff7a1a'));
+      base.position.y = -0.04;
+      g.add(base);
+      return g;
+    },
+  },
+  partyhat: {
+    name: 'Party Hat',
+    unlock: { pass: 'hat:partyhat' },
+    build(THREE, c) {
+      const g = new THREE.Group();
+      const cone = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.3, 16), mat(THREE, '#ff3db0', { roughness: 0.35 }));
+      cone.position.y = 0.1;
+      const stripe = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.075, 0.04, 16), mat(THREE, '#ffd23d'));
+      stripe.position.y = 0.08;
+      const glow = new THREE.MeshBasicMaterial({ color: c.accent || '#3df5ff' });
+      glow.toneMapped = false;
+      const pom = new THREE.Mesh(new THREE.SphereGeometry(0.04, 10, 8), glow);
+      pom.position.y = 0.26;
+      g.add(cone, stripe, pom);
+      g.rotation.z = 0.25;
+      g.position.x = -0.03;
+      return g;
+    },
+  },
+  catears: {
+    name: 'Cat Ears',
+    unlock: { pass: 'hat:catears' },
+    build(THREE, c) {
+      const g = new THREE.Group();
+      for (const s of [-1, 1]) {
+        const ear = new THREE.Mesh(new THREE.ConeGeometry(0.065, 0.13, 4), mat(THREE, c.secondary || '#222'));
+        ear.position.set(s * 0.085, -0.01, 0);
+        ear.rotation.set(0, Math.PI / 4, -s * 0.28);
+        const inner = new THREE.Mesh(new THREE.ConeGeometry(0.035, 0.08, 4), mat(THREE, '#ff8fc0'));
+        inner.position.set(s * 0.083, -0.025, 0.022);
+        inner.rotation.set(0, Math.PI / 4, -s * 0.28);
+        g.add(ear, inner);
+      }
+      return g;
+    },
+  },
+  visor: {
+    name: 'Glitch Visor',
+    unlock: { pass: 'hat:visor' },
+    build(THREE, c) {
+      const g = new THREE.Group();
+      const glow = new THREE.MeshBasicMaterial({ color: c.accent || '#7dff6b', side: THREE.DoubleSide });
+      glow.toneMapped = false;
+      // a glowing band across the face (the model faces +Z)
+      const band = new THREE.Mesh(new THREE.CylinderGeometry(0.152, 0.152, 0.055, 26, 1, true, -1.25, 2.5), glow);
+      band.position.y = -0.15;
+      const strap = new THREE.Mesh(new THREE.TorusGeometry(0.15, 0.012, 6, 26), mat(THREE, '#15171c'));
+      strap.rotation.x = Math.PI / 2;
+      strap.position.y = -0.15;
+      g.add(band, strap);
+      return g;
+    },
+  },
+  propeller: {
+    name: 'Propeller Cap',
+    unlock: { pass: 'hat:propeller' },
+    build(THREE, c) {
+      const g = new THREE.Group();
+      const dome = new THREE.Mesh(new THREE.SphereGeometry(0.15, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2), mat(THREE, c.accent || '#3d9bff'));
+      dome.position.y = -0.06;
+      const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, 0.1, 6), mat(THREE, '#ddd', { metalness: 0.7 }));
+      rod.position.y = 0.13;
+      g.add(dome, rod);
+      for (const [s, col] of [[1, '#ff3d3d'], [-1, '#ffd23d']]) {
+        const blade = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.008, 0.045), mat(THREE, col));
+        blade.position.set(s * 0.085, 0.18, 0);
+        blade.rotation.x = s * 0.25;
+        g.add(blade);
+      }
+      return g;
+    },
+  },
+  goldcap: {
+    name: 'Golden Cap',
+    unlock: { pass: 'hat:goldcap' },
+    build(THREE) {
+      const g = new THREE.Group();
+      const gold = mat(THREE, '#ffcc33', { metalness: 0.9, roughness: 0.22 });
+      const dome = new THREE.Mesh(new THREE.SphereGeometry(0.16, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2), gold);
+      dome.position.y = -0.08;
+      const brim = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.02, 0.15), gold);
+      brim.position.set(0, -0.075, 0.18);
+      g.add(dome, brim);
+      return g;
+    },
+  },
+  neoncrown: {
+    name: 'Neon Crown',
+    unlock: { pass: 'hat:neoncrown' },
+    build(THREE, c) {
+      const g = new THREE.Group();
+      const glow = new THREE.MeshBasicMaterial({ color: c.accent || '#3df5ff' });
+      glow.toneMapped = false;
+      const gem = new THREE.MeshBasicMaterial({ color: '#ff3df0' });
+      gem.toneMapped = false;
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.14, 0.018, 6, 28), glow);
+      ring.rotation.x = Math.PI / 2;
+      g.add(ring);
+      for (let i = 0; i < 5; i++) {
+        const a = (i / 5) * Math.PI * 2;
+        const sp = new THREE.Mesh(new THREE.OctahedronGeometry(0.035, 0), i % 2 ? glow : gem);
+        sp.scale.set(1, 2.2, 1);
+        sp.position.set(Math.cos(a) * 0.14, 0.07, Math.sin(a) * 0.14);
+        g.add(sp);
+      }
+      g.position.y = 0.02;
+      return g;
+    },
+  },
 };
 
 export const COLORS = [
@@ -168,6 +297,13 @@ export const COLORS = [
   { id: 'gold', hex: '#ffcc33', unlock: { level: 14 } },
   { id: 'crimson', hex: '#b5112c', unlock: { level: 18 } },
   { id: 'void', hex: '#0b0b10', unlock: { level: 20 } },
+  // Battle Pass, Season 1
+  { id: 'toxic', hex: '#c6ff1a', unlock: { pass: 'color:toxic' } },
+  { id: 'chrome', hex: '#bfc8d4', unlock: { pass: 'color:chrome' } },
+  { id: 'peach', hex: '#ffb38a', unlock: { pass: 'color:peach' } },
+  { id: 'grape', hex: '#6b2dd6', unlock: { pass: 'color:grape' } },
+  { id: 'midnight', hex: '#1b2a6b', unlock: { pass: 'color:midnight' } },
+  { id: 'hologram', hex: '#9ef0ff', unlock: { pass: 'color:hologram' } },
 ];
 
 export const TRAILS = {
@@ -176,6 +312,8 @@ export const TRAILS = {
   sparks: { name: 'Sparks', unlock: { level: 5 }, style: 'sparks' },
   rainbow: { name: 'Prism', unlock: { level: 11 }, style: 'rainbow' },
   ember: { name: 'Ember', unlock: { tags: 100 }, style: 'ember' },
+  glitch: { name: 'Glitch', unlock: { pass: 'trail:glitch' }, style: 'glitch' },
+  gold: { name: 'Gold Rush', unlock: { pass: 'trail:gold' }, style: 'gold' },
 };
 
 export const TAG_EFFECTS = {
@@ -183,6 +321,21 @@ export const TAG_EFFECTS = {
   shockwave: { name: 'Shockwave', unlock: { level: 3 } },
   confetti: { name: 'Confetti', unlock: { level: 7 } },
   lightning: { name: 'Lightning', unlock: { level: 13 } },
+  glitch: { name: 'Glitch Burst', unlock: { pass: 'tagfx:glitch' } },
+  fireworks: { name: 'Fireworks', unlock: { pass: 'tagfx:fireworks' } },
+};
+
+/** Player titles, shown under your name (menu card, lobby). */
+export const TITLES = {
+  none: { name: 'No title', unlock: { level: 1 } },
+  rookie: { name: 'Rookie Runner', unlock: { pass: 'title:rookie' } },
+  chaser: { name: 'Relentless Chaser', unlock: { pass: 'title:chaser' } },
+  glitched: { name: 'Glitched', unlock: { pass: 'title:glitched' } },
+  untaggable: { name: 'Untaggable', unlock: { pass: 'title:untaggable' } },
+  potato: { name: 'Hot Potato Survivor', unlock: { pass: 'title:potato' } },
+  slider: { name: 'Slide Rider', unlock: { pass: 'title:slider' } },
+  scrambler: { name: 'Master Scrambler', unlock: { pass: 'title:scrambler' } },
+  legend: { name: 'Season 1 Legend', unlock: { pass: 'title:legend' } },
 };
 
 export const EMOTES = {
@@ -192,9 +345,13 @@ export const EMOTES = {
   griddy: { name: 'Griddy', unlock: { level: 1 } },
   buggin: { name: "Buggin'", unlock: { level: 1 } },
   robot: { name: 'Robot', unlock: { level: 8 } },
+  salute: { name: 'Salute', unlock: { pass: 'emote:salute' } },
+  chicken: { name: 'Chicken Dance', unlock: { pass: 'emote:chicken' } },
+  chill: { name: 'Chill', unlock: { pass: 'emote:chill' } },
+  moonwalk: { name: 'Moonwalk', unlock: { pass: 'emote:moonwalk' } },
 };
-/** Emote ids in key order (1, 2, 3, 4, 5, 6). The server accepts exactly these. */
-export const EMOTE_IDS = ['wave', 'dance', 'flex', 'griddy', 'buggin', 'robot'];
+/** Emote ids in key order (1 … 9, 0). The server accepts exactly these. */
+export const EMOTE_IDS = ['wave', 'dance', 'flex', 'griddy', 'buggin', 'robot', 'salute', 'chicken', 'chill', 'moonwalk'];
 
 export const DEFAULT_COSMETICS = {
   primary: '#e9edf5', // the classic pearl-white mannequin
@@ -203,6 +360,7 @@ export const DEFAULT_COSMETICS = {
   hat: 'none',
   trail: 'streak',
   tagEffect: 'burst',
+  title: 'none',
 };
 
 /** Checks an unlock requirement against a profile. */
@@ -212,6 +370,7 @@ export function isUnlocked(unlock, profile) {
   if (unlock.wins && profile.stats.wins < unlock.wins) return false;
   if (unlock.tags && profile.stats.tags < unlock.tags) return false;
   if (unlock.survival && profile.stats.survival < unlock.survival) return false;
+  if (unlock.pass && !(profile.items || []).includes(unlock.pass)) return false; // claimed from the Battle Pass
   return true;
 }
 
@@ -221,6 +380,7 @@ export function describeUnlock(unlock) {
   if (unlock.wins) return `Win ${unlock.wins} matches`;
   if (unlock.tags) return `Make ${unlock.tags} tags`;
   if (unlock.survival) return `Survive ${Math.round(unlock.survival / 60)} minutes in total`;
+  if (unlock.pass) return 'Battle Pass reward';
   return '';
 }
 
@@ -234,6 +394,7 @@ export function sanitizeCosmetics(c) {
     hat: HATS[c?.hat] ? c.hat : 'none',
     trail: TRAILS[c?.trail] ? c.trail : 'none',
     tagEffect: TAG_EFFECTS[c?.tagEffect] ? c.tagEffect : 'burst',
+    title: TITLES[c?.title] ? c.title : 'none',
   };
 }
 

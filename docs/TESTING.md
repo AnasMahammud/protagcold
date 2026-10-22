@@ -15,6 +15,30 @@ The browser page shows each result and exposes `window.__TEST_RESULTS__` for aut
 
 ## Latest results (development machine: Windows 11, Intel UHD GPU, Chromium)
 
+### v1.05: victory and defeat screens (2026-10-22)
+
+- **Python: 82 / 82 passed** (nothing changed on the server).
+- **Browser: 150 / 150 passed.** New: the outro builds one span per letter and the right background (rays / scanlines); confetti (114 pieces) and ash (38) are finite CSS animations that are all done within about 8 s, with no canvas; disposing removes the title at once and the layer after its fade. The results screen renders for every mode, won and lost, with a three-step podium, the rewards and the actions.
+- **Performance:** the first, canvas-based particles cost about 0.2 ms a frame on average (172 pieces at most), but one measurement stalled for 3 s while the menu's arena was loading (a 2D canvas can wait on a busy GPU). The particles are now CSS-only, so they don't run any per-frame script at all.
+- **Real client checks:** the VICTORY slam with rays, confetti and the victory camera on the dancing winner (Waterpark, Docks); the DEFEAT crash with the crack, glitch split and ash (Mall); both results screens (gold and red), with the podium, LEVEL UP and +1 TIER badges, and the pass panel. Note: in this test setup the browser pane was in the background, where CSS animations don't advance, so the screenshots were taken by setting the animations' clocks by hand.
+- **Bug found and fixed:** leaving the results within 0.45 s left the fading title element in the page.
+
+
+### v1.04: Battle Pass (2026-10-22)
+
+- **Python: 82 / 82 passed.** New: a Battle Pass emote (the moonwalk) is relayed online; a `title` cosmetic survives the server's cleaning while junk values don't.
+- **Browser: 148 / 148 passed.** New tests:
+  - The season has 30 tiers on both tracks; every reward is a real catalogue item unlocked by the pass, used once, and every pass-locked catalogue item is a reward (29 items); Premium pays back 1,350 coins.
+  - Tier maths (300 XP per tier, capped at 30).
+  - Challenges: 3 daily and 4 weekly, all different, deterministic, rotating daily, weeks running Monday to Sunday.
+  - A match adds its XP; challenges (including mode-only ones) complete once and add their XP; nothing after the season ends.
+  - Claiming: only reached tiers, once each; Premium locked until bought; not enough coins spends nothing; buying makes reached Premium tiers claimable; claimed items unlock their cosmetic, others stay locked.
+  - A new season resets the pass but keeps claimed items.
+  - Every hat (18, the pass ones included) builds a character; titles are sanitised.
+  - The new emotes (salute, chicken dance, chill, moonwalk) pass the general emote test (key, duration, real movement).
+- **Real client checks:** the menu entry with "Tier 3 · 3 to claim" and Credits moved to the footer (the menu still fits 800×600); the pass screen (tier track, claimable rewards glowing, Premium locks, challenges with reset timers); *Claim all*; buying Premium with coins and claiming its rewards; equipping the Traffic Cone, the Toxic colour and the Rookie title; the results-screen pass panel after a match; the Chill emote in the Customise preview.
+
+
 ### v1.03: Scramble, new emotes, new characters, intro cutscene, motion blur (2026-10-22)
 
 - **Python: 81 / 81 passed.** New: a Scramble online hits the player 5 m away in the open with one of the three modes (the caster is told too) and nobody when they're 27 m away; the Griddy and Buggin' are relayed while an unknown emote id isn't.

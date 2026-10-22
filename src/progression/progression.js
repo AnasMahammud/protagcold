@@ -6,7 +6,8 @@
 
 import { loadJSON, saveJSON } from '../core/storage.js';
 import { bus } from '../core/events.js';
-import { DEFAULT_COSMETICS, HATS, TRAILS, TAG_EFFECTS, EMOTES, COLORS, isUnlocked } from './cosmetics.js';
+import { DEFAULT_COSMETICS, HATS, TRAILS, TAG_EFFECTS, EMOTES, COLORS, TITLES, isUnlocked } from './cosmetics.js';
+import * as BP from './battlepass.js';
 
 const DEFAULT_PROFILE = {
   version: 1,
@@ -18,6 +19,8 @@ const DEFAULT_PROFILE = {
   cosmetics: DEFAULT_COSMETICS,
   stats: { matches: 0, wins: 0, tags: 0, tagged: 0, survival: 0, longestSurvival: 0, itTime: 0, playTime: 0, online: 0 },
   history: [],
+  items: [], // cosmetics claimed from the Battle Pass ('hat:cone', 'emote:salute'...)
+  pass: null, // this season's Battle Pass (see battlepass.js)
 };
 
 export function xpForLevel(level, cfg) {
@@ -62,6 +65,45 @@ class Progression {
   constructor() {
     const saved = loadJSON('profile', null);
     this.profile = mergeProfile(saved);
+    BP.ensurePass(this.profile);
+  }
+
+  // ------------------------------------------------------------------ battle pass
+  /** This season's pass (rolls over daily / weekly challenges and seasons when needed). */
+  get pass() {
+    return BP.ensurePass(this.profile);
+  }
+
+  claimPass(track, tier) {
+    const r = BP.claim(this.profile, track, tier);
+    if (r.ok) {
+      this.save();
+      bus.emit('profile:changed', this.profile);
+    }
+    return r;
+  }
+
+  /** Claim everything that's ready. Returns the rewards. */
+  claimAllPass() {
+    const out = [];
+    for (const { track, tier } of BP.claimable(this.profile)) {
+      const r = BP.claim(this.profile, track, tier);
+      if (r.ok) out.push(r.reward);
+    }
+    if (out.length) {
+      this.save();
+      bus.emit('profile:changed', this.profile);
+    }
+    return out;
+  }
+
+  buyPremiumPass() {
+    const r = BP.buyPremium(this.profile);
+    if (r.ok) {
+      this.save();
+      bus.emit('profile:changed', this.profile);
+    }
+    return r;
   }
 
   get level() {
@@ -84,7 +126,7 @@ class Progression {
    * @param playerId local player's id
    * @param award { total, parts } computed locally (offline) or by the server (online)
    */
-  recordMatch(result, playerId, award, cfg, { online = false } = {}) {
+  recordMatch(result, playerId, award, cfg, { online = false, stats = {} } = {}) {
     const row = result.ranking.find((r) => r.id === playerId);
     const p = this.profile;
     const before = { level: p.level, unlocks: this.unlockedIds() };
@@ -108,11 +150,13 @@ class Progression {
     }
     p.history.unshift({ at: Date.now(), mode: result.mode, place: row?.place ?? null, winner: !!row?.winner, xp: award.total, tags: row?.tags ?? 0 });
     p.history = p.history.slice(0, 20);
+    // Battle Pass: the match's XP + challenge progress (abilities, emotes, slides... from the session)
+    const pass = BP.applyMatch(p, award.total, BP.matchStats(result, row, stats));
     this.save();
     const after = this.unlockedIds();
     const newUnlocks = after.filter((id) => !before.unlocks.includes(id));
     bus.emit('profile:changed', p);
-    return { levelsGained: p.level - before.level, newUnlocks };
+    return { levelsGained: p.level - before.level, newUnlocks, pass };
   }
 
   unlockedIds() {
@@ -123,6 +167,7 @@ class Progression {
     for (const [k, v] of Object.entries(TAG_EFFECTS)) if (isUnlocked(v.unlock, p)) ids.push(`tagfx:${k}`);
     for (const [k, v] of Object.entries(EMOTES)) if (isUnlocked(v.unlock, p)) ids.push(`emote:${k}`);
     for (const c of COLORS) if (isUnlocked(c.unlock, p)) ids.push(`color:${c.id}`);
+    for (const [k, v] of Object.entries(TITLES)) if (isUnlocked(v.unlock, p)) ids.push(`title:${k}`);
     return ids;
   }
 
@@ -200,6 +245,7 @@ function mergeProfile(saved) {
     },
     stats: { ...base.stats, ...(saved.stats || {}) },
     history: Array.isArray(saved.history) ? saved.history : [],
+    items: Array.isArray(saved.items) ? saved.items.filter((x) => typeof x === 'string') : [],
   };
 }
 

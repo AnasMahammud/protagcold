@@ -1,8 +1,45 @@
 // Game version + update history. Every update bumps VERSION and adds an entry at the TOP of
 // CHANGELOG: the first time a player opens a new version, the "What's new" screen shows it.
-export const VERSION = '1.03';
+export const VERSION = '1.05';
 
 export const CHANGELOG = [
+  {
+    version: '1.05',
+    date: '2026-10-22',
+    title: 'Brand-new victory & defeat screens',
+    sections: [
+      ['Victory', [
+        'VICTORY slams onto the screen letter by letter in gold, with an impact shake, golden light rays and two confetti cannons.',
+        'The camera circles you while you celebrate (the winners keep dancing behind the results).',
+      ]],
+      ['Defeat', [
+        'DEFEAT crashes down and cracks with a heavy shake, a red glitch and drifting ash, while the camera shows the winner celebrating.',
+      ]],
+      ['New results screen', [
+        'A podium for the top three that rises up, your stats, XP, Battle Pass XP and coins counting up, bars filling and badges popping in.',
+        'Built to stay smooth: only GPU-friendly animations, and the confetti stops by itself after a few seconds. "Reduce flashing" turns off the shake and flashes.',
+      ]],
+    ],
+  },
+  {
+    version: '1.04',
+    date: '2026-10-22',
+    title: 'Battle Pass — Season 1: Glitch Season',
+    sections: [
+      ['Battle Pass', [
+        '30 tiers of rewards. Every match earns pass XP, and challenges earn a lot more.',
+        'Free track for everyone: coins, the Party Hat, Cat Ears, the Salute and Chill emotes, new colours and titles, and the Golden Cap at tier 30.',
+        'Premium track (600 coins, earned by playing, never real money): a second reward on every tier, including the Traffic Cone, the Glitch Visor, the Neon Crown, the Moonwalk and Chicken Dance, Glitch and Gold Rush trails, Glitch Burst and Fireworks tag effects, and over 1,300 coins back.',
+      ]],
+      ['Challenges', [
+        '3 daily challenges (+150 XP each) and 4 weekly ones (+600 XP each), the same for everyone: tag runners, grab coins, ride slides, scramble players, play Hot Potato…',
+      ]],
+      ['Show it off', [
+        'Titles: pick one in Customise; it shows under your name on the menu and in lobbies.',
+        'Four new emotes on keys 7, 8, 9 and 0 once you unlock them.',
+      ]],
+    ],
+  },
   {
     version: '1.03',
     date: '2026-10-22',

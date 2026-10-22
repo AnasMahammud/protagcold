@@ -100,6 +100,7 @@ export class AbilitySystem {
     const res = this.execute(p, id, aim);
     if (res.ok) {
       p.abilityCd[id] = this.cfg[id].cooldown;
+      if (p.id === this.s.localId && this.s.localStats) this.s.localStats.abilities++;
       this.s.onAbilityUsed?.(p, id, res.data || {});
     } else if (p.id === this.s.localId) {
       audio.play('abilityDenied');
@@ -201,6 +202,7 @@ export class AbilitySystem {
     if (isLocal) {
       bus.emit('hud:banner', { text: 'SCRAMBLED!', sub: SCRAMBLE_HINT[mode], color: '#7dff6b', ms: 1500 });
     } else if (by && by.id === this.s.localId) {
+      if (this.s.localStats) this.s.localStats.scrambles++;
       bus.emit('hud:feed', { kind: 'info', text: `You scrambled ${q.name}` });
     }
   }

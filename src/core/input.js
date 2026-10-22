@@ -5,7 +5,7 @@ import { bus } from './events.js';
 
 const DEADZONE = 0.18;
 // key binding -> emote id (bindings emote1..emote6, see settings.js)
-const EMOTE_KEYS = [['emote1', 'wave'], ['emote2', 'dance'], ['emote3', 'flex'], ['emote4', 'griddy'], ['emote5', 'buggin'], ['emote6', 'robot']];
+const EMOTE_KEYS = [['emote1', 'wave'], ['emote2', 'dance'], ['emote3', 'flex'], ['emote4', 'griddy'], ['emote5', 'buggin'], ['emote6', 'robot'], ['emote7', 'salute'], ['emote8', 'chicken'], ['emote9', 'chill'], ['emote10', 'moonwalk']];
 
 export class InputManager {
   constructor(canvas) {

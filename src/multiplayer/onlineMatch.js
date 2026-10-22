@@ -187,18 +187,20 @@ export class OnlineMatch extends MatchSession {
     this.ended = true;
     const result = m.result;
     const award = m.award || { total: 0, parts: [] };
-    const prog = progression.recordMatch(result, this.localId, award, this.cfg.progression, { online: true });
+    const prog = progression.recordMatch(result, this.localId, award, this.cfg.progression, { online: true, stats: this.localStats });
     const won = result.winners.includes(this.localId);
     audio.play(won ? 'victory' : 'defeat');
     for (const id of result.winners) {
       const p = this.players.get(id);
       if (p) this.game.effects.confetti(p.renderPos);
     }
-    bus.emit('hud:banner', { text: won ? 'VICTORY' : 'MATCH OVER', sub: reasonText(result), color: won ? '#ffd23d' : '#ffffff', ms: 2200, big: true });
+    this.startOutro(result);
+    const row = result.ranking.find((r) => r.id === this.localId);
+    bus.emit('match:outro', { won, sub: reasonText(result), place: row?.place, total: result.ranking.length });
     setTimeout(() => {
       if (this.disposed) return;
       bus.emit('match:end', { result, award, prog, localId: this.localId, online: true, opts: this.opts, localName: this.local?.name });
-    }, 2300);
+    }, 2900);
   }
 
   simStep(dt, inp) {

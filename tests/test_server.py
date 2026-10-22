@@ -224,6 +224,13 @@ class MapFeatureValidationTests(unittest.TestCase):
         self.assertGreater(self._move(v, PlayerMotion([x0, 0.0, z0], 0, 100.0), line[:40]), 5)
 
 
+class CosmeticsTests(unittest.TestCase):
+    def test_battle_pass_title_survives_cleaning_but_junk_does_not(self):
+        from server.game_server import clean_cosmetics
+        c = clean_cosmetics({"primary": "#c6ff1a", "hat": "cone", "title": "legend", "evil": "<x>", "trail": "<script>"})
+        self.assertEqual(c, {"primary": "#c6ff1a", "hat": "cone", "title": "legend"})
+
+
 class StaticFileTests(unittest.TestCase):
     def test_public_and_private_paths(self):
         self.assertIsNotNone(resolve("/"))
@@ -685,6 +692,8 @@ class AbilityCoinServerTests(IntegrationTests):
         m, a, b, _ = await self._match([[], []])
         await a.send({"t": "emote", "e": "griddy"})
         self.assertEqual((await b.wait_for(t_is("emote")))["e"], "griddy")
+        await a.send({"t": "emote", "e": "moonwalk"})  # a Battle Pass emote
+        self.assertEqual((await b.wait_for(t_is("emote")))["e"], "moonwalk")
         await a.send({"t": "emote", "e": "hack"})
         await a.send({"t": "emote", "e": "buggin"})
         self.assertEqual((await b.wait_for(t_is("emote")))["e"], "buggin")  # "hack" never arrived

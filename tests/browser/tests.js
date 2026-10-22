@@ -1075,6 +1075,176 @@ suite('Scramble, emotes, characters, intro & motion blur', () => {
   });
 });
 
+// --------------------------------------------------------------------------- battle pass (v1.04)
+const BP = await import('../../src/progression/battlepass.js');
+const COS = await import('../../src/progression/cosmetics.js');
+
+suite('Battle Pass', () => {
+  const fakeProfile = (coins = 0) => ({ coins, items: [], level: 1, stats: { wins: 0, tags: 0, survival: 0 }, pass: null });
+  const DAYMS = 86400000;
+  test('season: 30 tiers, every reward exists in the catalogue, nothing orphaned', () => {
+    expect(BP.TIERS === 30 && BP.SEASON.rewards.every((r) => r.free && r.premium), '30 tiers, both tracks');
+    const cats = { hat: COS.HATS, emote: COS.EMOTES, trail: COS.TRAILS, tagfx: COS.TAG_EFFECTS, title: COS.TITLES };
+    const items = new Set();
+    for (const r of BP.SEASON.rewards) for (const x of [r.free, r.premium]) {
+      if (x.coins) { expect(x.coins > 0, 'coins'); continue; }
+      const [kind, id] = x.item.split(':');
+      const def = kind === 'color' ? COS.COLORS.find((c) => c.id === id) : cats[kind]?.[id];
+      expect(def && def.unlock?.pass === x.item, `${x.item} is in the catalogue and unlocked by the pass`);
+      expect(!items.has(x.item), `${x.item} appears once`);
+      items.add(x.item);
+      if (kind === 'emote') expect(COS.EMOTE_IDS.includes(id) && EMOTE_TIME[id], `${id} is a playable emote`);
+    }
+    // every catalogue entry that says "pass" is actually in the season
+    for (const [kind, cat] of Object.entries(cats)) for (const [id, v] of Object.entries(cat)) if (v.unlock?.pass) expect(items.has(`${kind}:${id}`), `${kind}:${id} is a reward`);
+    for (const c of COS.COLORS) if (c.unlock?.pass) expect(items.has(`color:${c.id}`), `color:${c.id} is a reward`);
+    const prem = BP.SEASON.rewards.reduce((a, r) => a + (r.premium.coins || 0), 0);
+    expect(prem > BP.SEASON.premiumPrice * 2, `premium pays back ${prem} coins`);
+    current.note = `${items.size} items, premium coins back: ${prem}`;
+  });
+  test('tiers: 300 XP each, capped at 30', () => {
+    expect(BP.tierOf(0).tier === 0 && BP.tierOf(299).tier === 0 && BP.tierOf(300).tier === 1, 'boundaries');
+    const t = BP.tierOf(1000);
+    expect(t.tier === 3 && t.into === 100 && t.need === 300, 'into');
+    expect(BP.tierOf(1e9).tier === 30, 'capped');
+  });
+  test('challenges: 3 daily + 4 weekly, the same for everyone, new ones each day / week', () => {
+    const d = BP.dailyChallenges(20000), w = BP.weeklyChallenges(3000);
+    expect(d.length === 3 && new Set(d.map((c) => c.id)).size === 3, 'three different dailies');
+    expect(w.length === 4 && new Set(w.map((c) => c.id)).size === 4, 'four different weeklies');
+    expect(JSON.stringify(BP.dailyChallenges(20000)) === JSON.stringify(d), 'deterministic');
+    let changed = 0;
+    for (let k = 1; k <= 7; k++) if (BP.dailyChallenges(20000 + k).map((c) => c.id).join() !== d.map((c) => c.id).join()) changed++;
+    expect(changed >= 5, `rotates daily (${changed}/7 days differ)`);
+    const now = Date.parse('2026-11-04T12:00:00');
+    expect(BP.weekKey(now) === BP.weekKey(now + 2 * DAYMS) && BP.weekKey(now) !== BP.weekKey(now + 6 * DAYMS), 'weeks run Monday to Sunday');
+  });
+  test('a match gives its XP; challenges complete once and add theirs', () => {
+    const prof = fakeProfile();
+    const now = Date.parse('2026-11-04T12:00:00');
+    const pass = BP.ensurePass(prof, now);
+    // make today's first daily a "tag 5 runners" one so the test knows what to do
+    pass.daily.list[0] = { id: 'd_tags5', progress: 0, done: false };
+    pass.daily.list[1] = { id: 'd_potato', progress: 0, done: false };
+    pass.daily.list[2] = { id: 'd_dodge', progress: 0, done: false };
+    pass.weekly.list = [{ id: 'w_dodge5', progress: 0, done: false }];
+    const res1 = BP.applyMatch(prof, 120, { mode: 'classic', matches: 1, tags: 3, survival: 60 }, now);
+    expect(res1.xp === 120 && res1.completed.length === 0 && pass.daily.list[0].progress === 3, 'progress, no completion yet');
+    const res2 = BP.applyMatch(prof, 80, { mode: 'hotpotato', matches: 1, tags: 4 }, now);
+    const ids = res2.completed.map((c) => c.id);
+    expect(ids.includes('d_tags5') && ids.includes('d_potato'), `completed ${ids}`);
+    expect(res2.xp === 80 + 2 * BP.CHALLENGE_XP.daily + res2.completed.filter((c) => c.kind === 'weekly').length * BP.CHALLENGE_XP.weekly, 'challenge XP added');
+    const res3 = BP.applyMatch(prof, 0, { mode: 'hotpotato', matches: 1, tags: 9 }, now);
+    expect(!res3.completed.some((c) => c.kind === 'daily' && (c.id === 'd_tags5' || c.id === 'd_potato')), 'never twice');
+    const res4 = BP.applyMatch(prof, 500, { mode: 'classic', matches: 1 }, Date.parse(BP.SEASON.ends) + 1000);
+    expect(res4.xp === 0, 'nothing after the season ends');
+  });
+  test('claiming: only reached tiers, once each; premium needs the pass, bought with coins', () => {
+    const prof = fakeProfile(100);
+    const pass = BP.ensurePass(prof);
+    expect(!BP.canClaim(prof, 'free', 1), 'tier 1 not reached yet');
+    pass.xp = 2 * BP.SEASON.tierXp;
+    const r1 = BP.claim(prof, 'free', 1);
+    expect(r1.ok && prof.items.includes('title:rookie'), 'free tier 1: the Rookie title');
+    expect(!BP.claim(prof, 'free', 1).ok, 'no double claim');
+    expect(BP.claim(prof, 'free', 2).ok && prof.coins === 150, 'free tier 2: 50 coins');
+    expect(!BP.claim(prof, 'free', 3).ok, 'tier 3 not reached');
+    expect(!BP.claim(prof, 'premium', 1).ok, 'premium locked');
+    expect(!BP.buyPremium(prof).ok && prof.coins === 150, 'not enough coins: nothing spent');
+    prof.coins = 700;
+    expect(BP.buyPremium(prof).ok && prof.coins === 100 && pass.premium, 'premium bought for 600');
+    expect(!BP.buyPremium(prof).ok, 'only once');
+    const ready = BP.claimable(prof);
+    expect(ready.length === 2 && ready.every((x) => x.track === 'premium'), 'premium tiers 1-2 now claimable');
+    expect(BP.claim(prof, 'premium', 1).ok && prof.items.includes('hat:cone'), 'Traffic Cone');
+    expect(COS.isUnlocked(COS.HATS.cone.unlock, prof) && !COS.isUnlocked(COS.HATS.neoncrown.unlock, prof), 'claimed items unlock their cosmetic, others stay locked');
+  });
+  test('a new season starts a fresh pass (items you claimed stay yours)', () => {
+    const prof = fakeProfile();
+    const pass = BP.ensurePass(prof);
+    pass.xp = 5000;
+    prof.items.push('hat:cone');
+    prof.pass.season = 's0';
+    BP.ensurePass(prof);
+    expect(prof.pass.xp === 0 && prof.pass.season === BP.SEASON.id && prof.items.includes('hat:cone'), 'reset, items kept');
+  });
+  test('every hat builds (pass hats included) and titles survive sanitising', () => {
+    for (const id of Object.keys(COS.HATS)) {
+      const m = new CharacterModel({ hat: id, primary: '#e9edf5' });
+      expect(m.mesh.geometry.attributes.position.count > 2000, `${id} builds`);
+      m.dispose();
+    }
+    expect(COS.sanitizeCosmetics({ title: 'legend' }).title === 'legend' && COS.sanitizeCosmetics({ title: 'hacker' }).title === 'none', 'titles sanitised');
+    current.note = `${Object.keys(COS.HATS).length} hats`;
+  });
+  test('match stats feed the challenges (abilities, emotes, slides, scrambles from the session)', () => {
+    const result = { mode: 'zone', ranking: [{ id: 'you', tags: 2, survival: 61.7, coins: 3, winner: true, dodges: 1 }] };
+    const st = BP.matchStats(result, result.ranking[0], { abilities: 4, emotes: 2, slides: 1, scrambles: 3 });
+    expect(st.mode === 'zone' && st.matches === 1 && st.tags === 2 && st.survival === 61 && st.coins === 3 && st.wins === 1 && st.dodges === 1, 'from the result');
+    expect(st.abilities === 4 && st.emotes === 2 && st.slides === 1 && st.scrambles === 3, 'from the session');
+  });
+});
+
+// --------------------------------------------------------------------------- end screens (v1.05)
+const { EndScreenFx } = await import('../../src/ui/endScreen.js');
+const { UI } = await import('../../src/ui/ui.js');
+
+suite('Victory & defeat screens', () => {
+  test('outro: builds the slam, confetti / ash are finite CSS animations, dispose cleans up', async () => {
+    // the game's stylesheet, just for this test (the animations live there)
+    const css = document.createElement('link');
+    css.rel = 'stylesheet';
+    css.href = '../../src/ui/styles.css';
+    await new Promise((r) => { css.onload = css.onerror = r; document.head.appendChild(css); });
+    try {
+    for (const won of [true, false]) {
+      const fx = new EndScreenFx(won, { title: won ? 'VICTORY' : 'DEFEAT', sub: 'test', place: won ? 1 : 4, total: 6 });
+      expect(document.querySelectorAll('.endfx-outro .eo-title span').length === (won ? 7 : 6), 'one span per letter');
+      expect(!!document.querySelector(won ? '.endfx.win .endfx-rays' : '.endfx.lose .endfx-scan'), 'background layer');
+      if (won) fx._confetti();
+      const bits = [...document.querySelectorAll('.endfx .bit')];
+      expect(bits.length > 30 && bits.length < 160, `${bits.length} pieces`);
+      // compositor-only and finite: every piece animates transform / opacity once, then is gone
+      let last = 0;
+      for (const b of bits) {
+        const cs = getComputedStyle(b);
+        expect(cs.animationIterationCount === '1', 'finite');
+        last = Math.max(last, parseFloat(cs.animationDuration) + parseFloat(cs.animationDelay));
+      }
+      expect(last <= 8.6, `all pieces done after ${last.toFixed(1)} s (removed at 9 s)`);
+      expect(!document.querySelector('.endfx canvas'), 'no canvas, no per-frame script');
+      current.note = (current.note ? current.note + '; ' : '') + `${won ? 'win' : 'loss'}: ${bits.length} pieces, done in ${last.toFixed(1)} s`;
+      fx.toResults();
+      fx.dispose();
+      expect(!document.querySelector('.endfx-outro') && document.querySelector('.endfx').classList.contains('gone'), 'the title goes at once, the layer fades');
+      for (let i = 0; i < 30 && document.querySelector('.endfx'); i++) await new Promise((r) => setTimeout(r, 100));
+      expect(!document.querySelector('.endfx, .endfx-outro'), 'nothing left behind');
+    }
+    } finally {
+      css.remove();
+    }
+  });
+  test('results screen renders for every mode, won and lost, with a podium', () => {
+    const fake = {
+      game: { session: null },
+      _mapName: () => 'Test Arena',
+      _passResults: UI.prototype._passResults,
+      _affordable: () => false,
+    };
+    const ranking = (mode) => ['you', 'b1', 'b2', 'b3'].map((id, i) => ({ id, name: id, place: i + 1, winner: i === 0, tags: i, itTime: i * 3, survival: 60 - i, out: mode !== 'classic' && i > 0, it: false, connected: true }));
+    for (const mode of ['classic', 'infection', 'elimination', 'hotpotato', 'zone']) {
+      for (const won of [true, false]) {
+        const r = { mode, duration: 120, winners: [won ? 'you' : 'b1'], ranking: ranking(mode), team: 'runners' };
+        fake.lastResult = { result: r, localId: 'you', award: { total: 140, parts: [['Participation', 40], ['Victory', 100]], coins: 40, coinParts: [['Match', 15]] }, prog: { levelsGained: 0, newUnlocks: [], pass: { xp: 140, tiersBefore: 0, tiersAfter: 0, completed: [{ id: 'x', text: 'Tag 5 runners', xp: 150, kind: 'daily' }] } }, opts: { mapId: 'training' }, online: false };
+        const html = UI.prototype.screen_results.call(fake);
+        expect(html.includes(won ? '>VICTORY<' : '>DEFEAT<') && html.includes(`results-screen ${won ? 'win' : 'lose'}`), `${mode}/${won}: title`);
+        expect((html.match(/class="pod p\d/g) || []).length === 3, `${mode}/${won}: podium`);
+        expect(html.includes('data-action="rematch"') && html.includes('data-count="140"'), `${mode}/${won}: rewards and actions`);
+      }
+    }
+  });
+});
+
 // --------------------------------------------------------------------------- map events & versions
 const { EventScheduler, eventMods, eventsForMap, EVENT_INFO } = await import('../../src/gameplay/mapEvents.js');
 const { VERSION, CHANGELOG } = await import('../../src/core/version.js');

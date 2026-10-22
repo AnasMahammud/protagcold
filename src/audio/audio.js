@@ -250,7 +250,7 @@ export class AudioEngine {
   }
 }
 
-const UI_SOUNDS = new Set(['introRise', 'introWhoosh', 'scrambled', 'eventWarn', 'eventStart', 'powerDown', 'powerUp', 'zoneClosing', 'perfectDodge', 'timeResume', 'boost', 'outplayed', 'uiHover', 'uiClick', 'uiBack', 'countdown', 'go', 'victory', 'defeat', 'levelUp', 'unlock', 'error', 'purchase', 'abilityDenied', 'abilityReady']);
+const UI_SOUNDS = new Set(['titleSlam', 'defeatHit', 'introRise', 'introWhoosh', 'scrambled', 'eventWarn', 'eventStart', 'powerDown', 'powerUp', 'zoneClosing', 'perfectDodge', 'timeResume', 'boost', 'outplayed', 'uiHover', 'uiClick', 'uiBack', 'countdown', 'go', 'victory', 'defeat', 'levelUp', 'unlock', 'error', 'purchase', 'abilityDenied', 'abilityReady']);
 
 const THROTTLE = {
   footstep: [0.07, 8],
@@ -472,6 +472,21 @@ const SFX = {
     a._noise(out, t, 0.5, { type: 'lowpass', freq: 3000, freqEnd: 150, q: 0.6, gain: 0.5 });
     a._tone(out, t, 0.25, { type: 'sawtooth', freq: 400, freqEnd: 60, gain: 0.12 });
     return 0.8;
+  },
+  titleSlam(a, out, t) {
+    // VICTORY lands: a deep boom, a bright crash and a rising major chord
+    a._tone(out, t, 0.6, { freq: 90, freqEnd: 32, gain: 0.9, attack: 0.003 });
+    a._noise(out, t, 0.5, { type: 'highpass', freq: 2200, q: 0.5, gain: 0.35, attack: 0.002 });
+    for (const [i, f] of [523.25, 659.25, 783.99, 1046.5].entries()) a._tone(out, t + 0.08 + i * 0.07, 0.9, { type: 'triangle', freq: f, gain: 0.07 });
+    return 1.3;
+  },
+  defeatHit(a, out, t) {
+    // DEFEAT crashes down: a heavy thud, a crack and a falling minor tone
+    a._tone(out, t, 0.9, { freq: 70, freqEnd: 24, gain: 1.0, attack: 0.003 });
+    a._noise(out, t, 0.35, { type: 'bandpass', freq: 900, freqEnd: 200, q: 0.8, gain: 0.45, attack: 0.002 });
+    a._tone(out, t + 0.12, 1.1, { type: 'sawtooth', freq: 220, freqEnd: 146.8, gain: 0.06 });
+    a._tone(out, t + 0.12, 1.1, { type: 'sawtooth', freq: 261.6, freqEnd: 174.6, gain: 0.04 });
+    return 1.3;
   },
   introRise(a, out, t) {
     // the arena reveal: an airy riser and a wide chord
