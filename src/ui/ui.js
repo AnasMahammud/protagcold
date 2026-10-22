@@ -9,7 +9,7 @@ import { loadMapIndex } from '../maps/mapLoader.js';
 import { LocalMatch } from '../gameplay/localMatch.js';
 import { OnlineMatch } from '../multiplayer/onlineMatch.js';
 import { progression, xpForLevel } from '../progression/progression.js';
-import { HATS, COLORS, TRAILS, TAG_EFFECTS, EMOTES, isUnlocked, describeUnlock } from '../progression/cosmetics.js';
+import { HATS, COLORS, TRAILS, TAG_EFFECTS, EMOTES, EMOTE_IDS, isUnlocked, describeUnlock } from '../progression/cosmetics.js';
 import { formatSeconds } from '../core/mathUtil.js';
 import { Hud, esc } from './hud.js';
 import { CharacterPreview } from './preview.js';
@@ -17,6 +17,8 @@ import { friends } from '../multiplayer/friends.js';
 import { ABILITY_IDS, ABILITY_INFO } from '../gameplay/abilities.js';
 import { abilityIcon, COIN_SVG } from './abilityIcons.js';
 import { VERSION, CHANGELOG } from '../core/version.js';
+
+const NEW_EMOTES = new Set(['griddy', 'buggin', 'robot']); // "NEW" badge in Customise (v1.03)
 
 const MODE_INFO = () => {
   const m = getConfig().modes;
@@ -423,16 +425,23 @@ export class UI {
     if (offline && s) s.paused = true;
     await this.game.prewarmEffects();
     if (s !== this.game.session || !this.inMatch) return; // left (or restarted) meanwhile
-    if (offline && s) s.paused = false;
     this.hideScreens();
     this.stack = [];
     this.paused = false;
-    this.hud.show(true);
     this.input.gameplayActive = true;
+    this.input.clearEdges();
+    this._envAudio(this.game.map.id, false);
+    // the map cutscene: a slow spin over the arena, then down to you (the countdown waits for it)
+    if (s && settings.data.camera.intro !== false) {
+      this.hud.show(false);
+      await s.playIntro({ duration: offline ? 6.5 : 5 });
+      if (s !== this.game.session || !this.inMatch) return;
+    }
+    if (offline && s) s.paused = false;
+    this.hud.show(true);
     this.input.clearEdges();
     this.touch.setAbilities(this.game.session?.local?.loadout || []);
     this.touch.setEnabled(this.touch.constructor.supported());
-    this._envAudio(this.game.map.id, false);
     this.input.requestPointerLock();
   }
 
@@ -1391,7 +1400,7 @@ export class UI {
         actions = [0, 1].map((i) => `<button class="btn small ${eq === i ? 'on' : ''}" data-action="equipAbility" data-id="${id}" data-slot="${i}"><span class="t">${eq === i ? '✓ ' : ''}Slot ${i + 1} (${esc(keys[i])})</span></button>`).join('');
       }
       return `<div class="ab-card ${owned ? 'owned' : short > 0 ? 'locked' : 'buyable'} ${eq >= 0 ? 'equipped' : ''}" data-card="${id}" style="--c:${info.color}">
-        <div class="ab-top"><div class="ico">${abilityIcon(id)}</div><div><div class="name">${esc(a.name)}</div><div class="meta">${stat(id)}</div></div>${owned ? `<span class="badge ${eq >= 0 ? 'ready' : 'wait'}">${eq >= 0 ? `ON ${esc(keys[eq])}` : 'OWNED'}</span>` : ''}</div>
+        <div class="ab-top"><div class="ico">${abilityIcon(id)}</div><div><div class="name">${esc(a.name)}${id === 'scramble' && !owned ? ' <span class="badge new">NEW</span>' : ''}</div><div class="meta">${stat(id)}</div></div>${owned ? `<span class="badge ${eq >= 0 ? 'ready' : 'wait'}">${eq >= 0 ? `ON ${esc(keys[eq])}` : 'OWNED'}</span>` : ''}</div>
         <p class="desc">${esc(info.desc)}</p>
         <div class="row ab-actions">${actions}</div>
       </div>`;
@@ -1444,10 +1453,12 @@ export class UI {
             <div class="label" style="margin-top:16px">Headwear</div>${cardSet('hat', HATS)}
             <div class="label" style="margin-top:16px">Trail</div>${cardSet('trail', TRAILS)}
             <div class="label" style="margin-top:16px">Tag effect</div>${cardSet('tagEffect', TAG_EFFECTS)}
-            <div class="label" style="margin-top:16px">Emotes <span style="color:var(--dim)">(keys 1 · 2 · 3)</span></div>
-            <div class="cards">${Object.entries(EMOTES).map(([id, e]) => {
+            <div class="label" style="margin-top:16px">Emotes <span style="color:var(--dim)">(keys 1–6)</span></div>
+            <div class="cards">${EMOTE_IDS.map((id, i) => {
+              const e = EMOTES[id];
               const ok = isUnlocked(e.unlock, prof);
-              return `<div class="card ${ok ? '' : 'locked'}"><div class="name">${e.name}</div>${ok ? '<div class="desc">Unlocked</div>' : `<div class="lock">🔒 ${describeUnlock(e.unlock)}</div>`}</div>`;
+              const key = describeCode(settings.data.controls.bindings[`emote${i + 1}`]?.[0]);
+              return `<div class="card ${ok ? '' : 'locked'}"><div class="name">${e.name}${NEW_EMOTES.has(id) ? ' <span class="badge new">NEW</span>' : ''}</div>${ok ? `<div class="desc">Key ${esc(key)}</div>` : `<div class="lock">🔒 ${describeUnlock(e.unlock)}</div>`}</div>`;
             }).join('')}</div>
           </div>
         </div>
@@ -1527,7 +1538,7 @@ export class UI {
     } else if (tab === 'camera') {
       body = slider('camera.fov', 'Field of view', 60, 105, 1) + slider('camera.distance', 'Camera distance', 2.5, 7, 0.1) + toggle('camera.sprintFov', 'Speed FOV effect', 'Widen the view slightly when sprinting and sliding') + toggle('camera.shake', 'Camera shake', 'Small shake when tagging or being tagged') + toggle('camera.landingDip', 'Landing camera dip');
     } else if (tab === 'graphics') {
-      body = seg('graphics.quality', 'Quality preset', [['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['ultra', 'Ultra']], 'Shadows, bloom, particle budget, draw distance, resolution') + slider('graphics.renderScale', 'Resolution scale', 0.5, 1.5, 0.05, 'Rendering resolution relative to your screen') + seg('graphics.fpsLimit', 'Frame-rate limit', [[0, 'Off'], [30, '30'], [60, '60'], [120, '120'], [144, '144']]) + toggle('graphics.dynamicRes', 'Dynamic resolution', 'When the graphics card is the bottleneck, briefly render fewer pixels instead of dropping frames') + toggle('graphics.showFps', 'Show FPS counter') + `<div class="setting"><div>Fullscreen<span class="hint">Currently ${document.fullscreenElement ? 'fullscreen' : 'windowed'}</span></div><button class="btn small" data-action="fullscreen" style="justify-self:end"><span class="t">${document.fullscreenElement ? 'Exit fullscreen' : 'Go fullscreen'}</span></button></div>` + `<div class="setting"><div>VSync<span class="hint">Browsers always synchronise rendering to the display. Use the frame-rate limit above to cap FPS.</span></div><div style="justify-self:end;color:var(--muted)">Always on</div></div>` + `<p class="subtitle">Real-time lights and decoration density apply when the next arena loads; anti-aliasing applies after reloading the page.</p>`;
+      body = seg('graphics.quality', 'Quality preset', [['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['ultra', 'Ultra']], 'Shadows, bloom, particle budget, draw distance, resolution') + slider('graphics.renderScale', 'Resolution scale', 0.5, 1.5, 0.05, 'Rendering resolution relative to your screen') + seg('graphics.fpsLimit', 'Frame-rate limit', [[0, 'Off'], [30, '30'], [60, '60'], [120, '120'], [144, '144']]) + toggle('graphics.dynamicRes', 'Dynamic resolution', 'When the graphics card is the bottleneck, briefly render fewer pixels instead of dropping frames') + toggle('camera.intro', 'Map intro cutscene', 'A short fly-over of the arena before every match (any key skips it)') + toggle('graphics.motionBlur', 'Motion blur', 'A slight blur when the camera turns fast and at top speed (screen edges only). Not on the Low preset') + toggle('graphics.showFps', 'Show FPS counter') + `<div class="setting"><div>Fullscreen<span class="hint">Currently ${document.fullscreenElement ? 'fullscreen' : 'windowed'}</span></div><button class="btn small" data-action="fullscreen" style="justify-self:end"><span class="t">${document.fullscreenElement ? 'Exit fullscreen' : 'Go fullscreen'}</span></button></div>` + `<div class="setting"><div>VSync<span class="hint">Browsers always synchronise rendering to the display. Use the frame-rate limit above to cap FPS.</span></div><div style="justify-self:end;color:var(--muted)">Always on</div></div>` + `<p class="subtitle">Real-time lights and decoration density apply when the next arena loads; anti-aliasing applies after reloading the page.</p>`;
     } else if (tab === 'access') {
       body = toggle('accessibility.reduceFlashing', 'Reduce flashing & shake', 'Disables screen flashes, danger vignette and camera shake') + toggle('accessibility.dodgeAssist', 'Perfect-dodge assist', 'Flashes NOW! inside the perfect-dodge window. Off = you time it from the shrinking ring alone') + slider('accessibility.hudScale', 'HUD scale', 0.75, 1.5, 0.05) + toggle('accessibility.largeText', 'Larger menu text') + `<p class="subtitle" style="margin-top:12px">The IT player is always shown with a shape (spinning crown-flame and ground ring), not just a colour, so it stays readable for colour-blind players.</p>`;
     } else if (tab === 'network') {
@@ -1564,7 +1575,7 @@ export class UI {
             <div class="cg"><span>Dodge</span><span>${k('dodge')}</span></div>
             <div class="cg"><span>Vault / climb</span><span>${k('vault')}</span></div>
             <div class="cg"><span>Ability slot 1 / 2</span><span>${k('ability1')} ${k('ability2')}</span></div>
-            <div class="cg"><span>Emotes</span><span>${k('emote1')} ${k('emote2')} ${k('emote3')}</span></div>
+            <div class="cg"><span>Emotes</span><span>${k('emote1')} ${k('emote2')} ${k('emote3')} ${k('emote4')} ${k('emote5')} ${k('emote6')}</span></div>
             <div class="cg"><span>Scoreboard</span><span>${k('scoreboard')}</span></div>
             <div class="cg"><span>Practice: swap IT</span><span>${k('swapIt')}</span></div>
             <div class="cg"><span>Pause</span><span>${k('pause')}</span></div>
@@ -1577,7 +1588,7 @@ export class UI {
             <div class="cg"><span>Sprint</span><span>RB / R1 (hold) or L3</span></div>
             <div class="cg"><span>Dodge</span><span>LB / L1</span></div>
             <div class="cg"><span>Ability slot 1 / 2</span><span>Y / Triangle · RT / R2</span></div>
-            <div class="cg"><span>Emotes</span><span>D-pad ↑ ← →</span></div>
+            <div class="cg"><span>Emotes</span><span>D-pad ↑ ← → · R3 cycles Griddy / Buggin' / Robot</span></div>
             <div class="cg"><span>Scoreboard</span><span>View / Select</span></div>
             <div class="cg"><span>Practice: swap IT</span><span>D-pad ↓</span></div>
             <div class="cg"><span>Pause</span><span>Menu / Start</span></div>

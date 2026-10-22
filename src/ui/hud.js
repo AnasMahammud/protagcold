@@ -13,6 +13,7 @@ export class Hud {
     this.root = root;
     root.innerHTML = `
       <div class="vignette"></div>
+      <div class="scramble-fx"></div>
       <div class="crosshair"></div>
       <div class="top">
         <div class="mode"></div>
@@ -52,7 +53,7 @@ export class Hud {
       <div class="perfect hidden"><div class="pt"></div><div class="ps"></div></div>`;
     const q = (s) => root.querySelector(s);
     this.el = {
-      vignette: q('.vignette'), mode: q('.mode'), clock: q('.clock'), itline: q('.itline'), objective: q('.objective'),
+      vignette: q('.vignette'), scramble: q('.scramble-fx'), mode: q('.mode'), clock: q('.clock'), itline: q('.itline'), objective: q('.objective'),
       counts: q('.counts'), tags: q('.tags'), fps: q('.fps'), net: q('.net'), feed: q('.feed'), arrow: q('.arrow'),
       arrowI: q('.arrow i'), arrowS: q('.arrow span'), banner: q('.banner'), bannerT: q('.banner .t'), bannerS: q('.banner .s'),
       status: q('.status'), dodge: q('.ability.dodge'), slide: q('.ability.slide'), stamina: q('.stamina'), staminaI: q('.stamina i'),
@@ -152,10 +153,18 @@ export class Hud {
     let status = '';
     if (s.stunned) status = 'STUNNED — you got perfect-dodged!';
     else if (s.frozen) status = 'STUNNED — new IT';
+    else if (s.scrambled) status = `SCRAMBLED ${s.scrambled.left.toFixed(1)} s · ${s.scrambled.hint}`;
     else if (s.protected) status = s.boostLeft > 0 ? 'UNTOUCHABLE' : 'SPAWN PROTECTION';
     else if (s.localOut) status = 'ELIMINATED';
     this._set('status', e.status, 'text', status);
     this._set('statusH', e.status, 'hidden', !status);
+    const scr = !!s.scrambled;
+    if (this.cache.scr !== scr) {
+      this.cache.scr = scr;
+      e.scramble.classList.toggle('on', scr);
+      e.scramble.classList.toggle('calm', !!settings.data.accessibility.reduceFlashing);
+      e.status.classList.toggle('scrambled', scr);
+    }
     const danger = !s.localIt && !s.localOut && s.arrow && s.arrow.threat && s.arrow.dist < 7 && !settings.data.accessibility.reduceFlashing;
     if (this.cache.danger !== danger) {
       this.cache.danger = danger;

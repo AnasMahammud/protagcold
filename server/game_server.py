@@ -35,7 +35,9 @@ CHAT_MAX = 140
 CHAT_HISTORY = 40
 KICK_BAN_SECONDS = 120.0
 ROOM_NAME_RE = re.compile(r"[^\w\-' !?.]")
-ABILITY_IDS = ("blink", "rocket", "decoy", "grapple", "cloak", "shockwave")
+ABILITY_IDS = ("blink", "rocket", "decoy", "grapple", "cloak", "shockwave", "scramble")
+EMOTE_IDS = ("wave", "dance", "flex", "griddy", "buggin", "robot")  # mirrors EMOTE_IDS in cosmetics.js
+SCRAMBLE_MODES = ("invert", "mirror", "spin")  # mirrors SCRAMBLE_MODES in abilities.js
 
 
 def _vec3(v):
@@ -732,6 +734,26 @@ class GameServer:
             return
         m.ability_t[c.id][aid] = t
         await self.broadcast(room, {"t": "ability", "id": aid, "by": c.id, "data": data}, exclude=c.id)
+        if aid == "scramble":
+            await self._scramble(room, m, c.id, a)
+
+    async def _scramble(self, room, m, src, a):
+        """Scramble: the server picks who is hit (in range, roughly level, in line of sight) and how
+        their controls are mixed up; every client shows it and each victim's client applies it to
+        its own input. Movement validation needs no allowance: scrambled players move normally."""
+        so = m.motion[src]
+        hits = []
+        for pid, mo in m.motion.items():
+            p = m.state["players"].get(pid)
+            if pid == src or not p or p["out"] or not p["connected"]:
+                continue
+            d = math.hypot(mo.pos[0] - so.pos[0], mo.pos[2] - so.pos[2])
+            if d > a["radius"] + 0.5 or abs(mo.pos[1] - so.pos[1]) > 3.5:
+                continue
+            if not m.map.line_of_sight((so.pos[0], so.pos[1] + 1.0, so.pos[2]), (mo.pos[0], mo.pos[1] + 1.0, mo.pos[2])):
+                continue
+            hits.append([pid, random.choice(SCRAMBLE_MODES)])
+        await self.broadcast(room, {"t": "scramble", "by": src, "hits": hits, "dur": a["duration"]})
 
     async def _shockwave(self, room, m, src, a):
         """Knock back everyone near the caster: the server decides who is hit and how hard, sends
@@ -940,7 +962,7 @@ class GameServer:
 
     async def on_emote(self, c, msg):
         e = msg.get("e")
-        if c.room and e in ("wave", "dance", "flex"):
+        if c.room and e in EMOTE_IDS:
             await self.broadcast(c.room, {"t": "emote", "id": c.id, "e": e}, exclude=c.id)
 
     # ------------------------------------------------------------------ match loop
@@ -948,7 +970,8 @@ class GameServer:
         try:
             # wait (up to 10 s) for every client to load the map before the countdown runs
             t0 = now()
-            while now() - t0 < 10 and not set(m.roster_ids).issubset(m.loaded | {pid for pid in m.roster_ids if not m.state["players"][pid]["connected"]}):
+            # up to 16 s: loading + shader warm-up + the map intro cutscene (players can skip it)
+            while now() - t0 < 16 and not set(m.roster_ids).issubset(m.loaded | {pid for pid in m.roster_ids if not m.state["players"][pid]["connected"]}):
                 await asyncio.sleep(0.05)
             room.phase = "playing"
             await self.broadcast_room(room)

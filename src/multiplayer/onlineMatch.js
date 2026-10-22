@@ -71,6 +71,14 @@ export class OnlineMatch extends MatchSession {
       p.ctrl.applyImpulse(m.v[0], m.v[1], m.v[2]);
       this.game.cameraRig.shake(0.35);
     });
+    on('scramble', (m) => {
+      // the server decided who a Scramble hit (and how): glitch them, and our own controls if we're one
+      const by = this.players.get(m.by);
+      for (const [id, mode] of Array.isArray(m.hits) ? m.hits : []) {
+        const p = this.players.get(id);
+        if (p) this.abilities.scramble(p, mode, Math.min(8, +m.dur || 0), by);
+      }
+    });
     on('coin_taken', (m) => this.coins.take(m.id, m.by));
     on('coin_spawn', (m) => this.coins.spawn(m.id, { x: m.p[0], y: m.p[1], z: m.p[2] }, { drop: !!m.drop }));
     on('coin_denied', (m) => this.coins.pending.delete(m.id));

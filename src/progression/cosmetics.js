@@ -189,13 +189,18 @@ export const EMOTES = {
   wave: { name: 'Wave', unlock: { level: 1 } },
   dance: { name: 'Groove', unlock: { level: 3 } },
   flex: { name: 'Flex', unlock: { level: 6 } },
+  griddy: { name: 'Griddy', unlock: { level: 1 } },
+  buggin: { name: "Buggin'", unlock: { level: 1 } },
+  robot: { name: 'Robot', unlock: { level: 8 } },
 };
+/** Emote ids in key order (1, 2, 3, 4, 5, 6). The server accepts exactly these. */
+export const EMOTE_IDS = ['wave', 'dance', 'flex', 'griddy', 'buggin', 'robot'];
 
 export const DEFAULT_COSMETICS = {
-  primary: '#ff5a3d',
+  primary: '#e9edf5', // the classic pearl-white mannequin
   secondary: '#20242e',
   accent: '#3df5ff',
-  hat: 'cap',
+  hat: 'none',
   trail: 'streak',
   tagEffect: 'burst',
 };

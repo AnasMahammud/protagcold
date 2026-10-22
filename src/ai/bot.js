@@ -424,6 +424,7 @@ export class BotBrain {
       if (ready('cloak')) options.push(['cloak', {}]);
       if (ready('decoy')) options.push(['decoy', { dir: rotate(away, this.rng() < 0.5 ? 1.4 : -1.4) }]);
       if (ready('shockwave') && d < 3.5) options.push(['shockwave', {}]);
+      if (ready('scramble') && d < 7) options.push(['scramble', {}]);
       if (ready('rocket')) options.push(['rocket', {}]);
       if (!options.length) return;
       [pick, aim] = options[Math.floor(this.rng() * options.length)];
@@ -435,6 +436,9 @@ export class BotBrain {
       } else if (ready('blink') && d > 4.5 && d < 9.5 && Math.abs(dy) < 1 && ctx.world.lineOfSight({ x: pos.x, y: pos.y + 1, z: pos.z }, { x: k.pos.x, y: k.pos.y + 1, z: k.pos.z })) {
         pick = 'blink';
         aim = { move: { x: dx / d, z: dz / d } };
+      } else if (ready('scramble') && d > 2.5 && d < 8 && Math.abs(dy) < 2.5 && ctx.world.lineOfSight({ x: pos.x, y: pos.y + 1, z: pos.z }, { x: k.pos.x, y: k.pos.y + 1, z: k.pos.z })) {
+        pick = 'scramble'; // a runner just out of reach: scramble them so they stumble into you
+        aim = {};
       }
     }
     if (pick) {

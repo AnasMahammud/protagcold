@@ -4,6 +4,8 @@ import { settings } from './settings.js';
 import { bus } from './events.js';
 
 const DEADZONE = 0.18;
+// key binding -> emote id (bindings emote1..emote6, see settings.js)
+const EMOTE_KEYS = [['emote1', 'wave'], ['emote2', 'dance'], ['emote3', 'flex'], ['emote4', 'griddy'], ['emote5', 'buggin'], ['emote6', 'robot']];
 
 export class InputManager {
   constructor(canvas) {
@@ -162,7 +164,7 @@ export class InputManager {
       swapItPressed: this._action('swapIt', p),
       ability1Pressed: this._action('ability1', p),
       ability2Pressed: this._action('ability2', p),
-      emote: this._action('emote1', p) ? 'wave' : this._action('emote2', p) ? 'dance' : this._action('emote3', p) ? 'flex' : null,
+      emote: EMOTE_KEYS.find(([action]) => this._action(action, p))?.[1] ?? null,
     };
 
     // ---- gamepad
@@ -197,6 +199,7 @@ export class InputManager {
       if (edge(12)) cmd.emote = 'wave';
       if (edge(14)) cmd.emote = 'dance';
       if (edge(15)) cmd.emote = 'flex';
+      if (edge(11)) cmd.emote = this.padEmoteCycle = this.padEmoteCycle === 'griddy' ? 'buggin' : this.padEmoteCycle === 'buggin' ? 'robot' : 'griddy'; // R3 cycles the new ones
       this.prevPad = pad.buttons.map((x) => x.pressed);
     }
 

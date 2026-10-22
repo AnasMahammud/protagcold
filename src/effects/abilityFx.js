@@ -200,6 +200,43 @@ export function shockwaveFx(session, p, radius) {
   }
 }
 
+// ------------------------------------------------------------------ scramble
+export function scrambleFx(session, p, radius) {
+  const scene = session.game.scene;
+  const pos = { x: p.renderPos.x, y: p.renderPos.y, z: p.renderPos.z };
+  // two jittering wireframe "glitch fields" sweep out to the edge of the range
+  for (const [color, r, life] of [['#7dff6b', radius, 0.55], ['#ff3df0', radius * 0.7, 0.42]]) {
+    const m = glowMat(color, 0.6);
+    m.wireframe = true;
+    const ico = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 1), m);
+    ico.position.set(pos.x, pos.y + 1, pos.z);
+    addAnim(scene, ico, life, (k, o) => {
+      const s = 0.4 + (r - 0.4) * (1 - (1 - k) * (1 - k));
+      o.scale.set(s, s * 0.55, s);
+      o.rotation.y = k * 2.5 + (Math.random() - 0.5) * 0.15;
+      o.position.x = pos.x + (Math.random() - 0.5) * 0.25;
+      o.material.opacity = 0.6 * (1 - k) * (Math.random() < 0.15 ? 0.3 : 1);
+    });
+  }
+  const fx = session.game.effects;
+  fx.ring(pos, '#7dff6b', radius, 0.5);
+  fx.ring(pos, '#ff3df0', radius * 0.55, 0.35);
+  fx.burst({ x: pos.x, y: pos.y + 1, z: pos.z }, '#7dff6b', { count: 34, speed: 8, size: 0.16, life: 0.5, up: 1, grav: 0, spread: 0.6 });
+  fx.burst({ x: pos.x, y: pos.y + 1, z: pos.z }, '#ff3df0', { count: 18, speed: 6, size: 0.14, life: 0.4, up: 1, grav: 0, spread: 0.6 });
+  audio.play('scramble', { pos });
+}
+
+/** A player just got scrambled: a glitch burst round their head (and a screen glitch if it's you). */
+export function scrambledFx(session, q, isLocal) {
+  const pos = q.renderPos;
+  session.game.effects.burst({ x: pos.x, y: pos.y + 1.8, z: pos.z }, '#7dff6b', { count: 16, speed: 3, size: 0.12, life: 0.45, up: 1.5, grav: 2 });
+  if (isLocal) {
+    audio.play('scrambled');
+    session.game.perfectFx?.pulse({ chroma: 1.1, zoom: 0.25, ms: 420 });
+    session.game.cameraRig.shake(0.25);
+  }
+}
+
 const keepAlive = []; // warm-up materials, never disposed (see prewarmObjects)
 
 /**

@@ -7,7 +7,7 @@ import { audio } from '../audio/audio.js';
 import { bus } from '../core/events.js';
 import * as AFX from '../effects/abilityFx.js';
 
-export const ABILITY_IDS = ['blink', 'rocket', 'decoy', 'grapple', 'cloak', 'shockwave'];
+export const ABILITY_IDS = ['blink', 'rocket', 'decoy', 'grapple', 'cloak', 'shockwave', 'scramble'];
 
 /** Presentation info (gameplay numbers live in config/game.json -> abilities). */
 export const ABILITY_INFO = {
@@ -17,7 +17,43 @@ export const ABILITY_INFO = {
   grapple: { icon: 'grapple', color: '#7dff6b', desc: 'Fire a hook at whatever is under your crosshair (24 m) and zip to it. Jump to let go early.' },
   cloak: { icon: 'cloak', color: '#b48cff', desc: 'Turn almost invisible for 4 s: no name tag, no arrow pointing at you, bots lose track of you.' },
   shockwave: { icon: 'shockwave', color: '#ff3df0', desc: 'Blast everyone within 6 m away from you and into the air. Escape a corner — or knock runners off a roof.' },
+  scramble: { icon: 'scramble', color: '#7dff6b', desc: 'Glitch everyone within 9 m who can see you: for 3.5 s their controls are scrambled (inverted, mirrored or spun round).' },
 };
+
+// ------------------------------------------------------------------ scramble
+/** The three ways Scramble messes up a victim's controls. */
+export const SCRAMBLE_MODES = ['invert', 'mirror', 'spin'];
+export const SCRAMBLE_HINT = {
+  invert: 'Controls inverted!',
+  mirror: 'Left/right and jump/slide swapped!',
+  spin: 'Controls spun 90°!',
+};
+
+/** A scrambled stick: (mx = right, my = forward), relative to whatever frame the player steers in. */
+export function scrambleStick(mx, my, mode) {
+  if (mode === 'invert') return [-mx, -my];
+  if (mode === 'mirror') return [-mx, my];
+  if (mode === 'spin') return [my, -mx]; // forward goes right, right goes back...
+  return [mx, my];
+}
+
+/**
+ * Scramble a world-space controller input (bots). `yaw` is the frame the victim was facing when
+ * it was scrambled (a fixed frame: the facing direction itself changes as they stumble about).
+ */
+export function scrambleWorldInput(inp, mode, yaw) {
+  const fx = -Math.sin(yaw), fz = -Math.cos(yaw), rx = Math.cos(yaw), rz = -Math.sin(yaw);
+  const [mx, my] = scrambleStick(inp.mx * rx + inp.mz * rz, inp.mx * fx + inp.mz * fz, mode);
+  const out = { ...inp, mx: rx * mx + fx * my, mz: rz * mx + fz * my };
+  if (mode === 'mirror') swapJumpSlide(out, inp);
+  return out;
+}
+
+function swapJumpSlide(out, inp) {
+  out.jumpPressed = !!inp.slidePressed;
+  out.slidePressed = !!inp.jumpPressed;
+  out.jumpHeld = true;
+}
 
 /** Two positional slots (F / R): [id|null, id|null], no duplicates, unknown ids dropped. */
 export function validLoadout(ids) {
@@ -126,9 +162,60 @@ export class AbilitySystem {
         if (!remote && !this.s.online) this.pushAround(p, c); // offline: push now; online the server pushes
         return { ok: true };
       }
+      case 'scramble': {
+        AFX.scrambleFx(this.s, p, c.radius);
+        if (!remote && !this.s.online) {
+          // offline: glitch everyone in range now (online the server picks the victims and modes)
+          const rng = this.s.rng || Math.random;
+          for (const q of this.scrambleTargets(p, c.radius)) this.scramble(q, SCRAMBLE_MODES[Math.floor(rng() * SCRAMBLE_MODES.length)], c.duration, p);
+        }
+        return { ok: true };
+      }
       default:
         return { ok: false, reason: 'unknown' };
     }
+  }
+
+  /** Everyone a Scramble from `p` reaches: in range, roughly level, and in line of sight. */
+  scrambleTargets(p, radius) {
+    const out = [];
+    const w = this.s.world;
+    for (const q of this.s.players.values()) {
+      if (q === p || q.out || !q.connected) continue;
+      const d = Math.hypot(q.ctrl.pos.x - p.ctrl.pos.x, q.ctrl.pos.z - p.ctrl.pos.z);
+      if (d > radius || Math.abs(q.ctrl.pos.y - p.ctrl.pos.y) > 3.5) continue;
+      if (!w.lineOfSight({ x: p.ctrl.pos.x, y: p.ctrl.pos.y + 1, z: p.ctrl.pos.z }, { x: q.ctrl.pos.x, y: q.ctrl.pos.y + 1, z: q.ctrl.pos.z })) continue;
+      out.push(q);
+    }
+    return out;
+  }
+
+  /** Scramble `q`'s controls for `dur` seconds (offline: from execute; online: the server says so). */
+  scramble(q, mode, dur, by) {
+    if (!SCRAMBLE_MODES.includes(mode)) mode = 'invert';
+    q.scrambleUntil = this.time + dur;
+    q.scrambleMode = mode;
+    q.scrambleYaw = q.ctrl.yaw;
+    const isLocal = q.id === this.s.localId;
+    AFX.scrambledFx(this.s, q, isLocal);
+    if (isLocal) {
+      bus.emit('hud:banner', { text: 'SCRAMBLED!', sub: SCRAMBLE_HINT[mode], color: '#7dff6b', ms: 1500 });
+    } else if (by && by.id === this.s.localId) {
+      bus.emit('hud:feed', { kind: 'info', text: `You scrambled ${q.name}` });
+    }
+  }
+
+  isScrambled(p) {
+    return (p.scrambleUntil ?? -1) > this.time;
+  }
+
+  scrambleLeft(p) {
+    return Math.max(0, (p.scrambleUntil ?? -1) - this.time);
+  }
+
+  /** The controls a scrambled player really gets (world-space input, e.g. a bot's). */
+  scrambledInput(p, inp) {
+    return this.isScrambled(p) ? scrambleWorldInput(inp, p.scrambleMode, p.scrambleYaw ?? p.ctrl.yaw) : inp;
   }
 
   /** Offline shockwave: push every other player in range (online the server does this). */
@@ -219,7 +306,10 @@ export class AbilitySystem {
       }
       rope.update(p, dt);
     }
-    for (const p of this.s.players.values()) AFX.cloakVisual(p, this.isCloaked(p), p.id === this.s.localId, time);
+    for (const p of this.s.players.values()) {
+      AFX.cloakVisual(p, this.isCloaked(p), p.id === this.s.localId, time);
+      p.model.setScrambled(this.isScrambled(p) && !p.out, time);
+    }
   }
 
   /** Bots see decoys as runners (that's the point of them). */

@@ -129,6 +129,7 @@ export class LocalMatch extends MatchSession {
       else if (p.brain) {
         input = this.ended ? ZERO : p.brain.update(dt, botCtx || { players: [], world: this.world, phase: rules.phase });
         if (playing && input.ability != null) this.abilities.use(p, input.ability, input.aim || {});
+        input = this.abilities.scrambledInput(p, input); // a scrambled bot stumbles about too
       }
       p.ctrl.frozen = p.frozen || rules.phase === 'countdown';
       p.ctrl.speedMultiplier = (p.it ? tagCfg.itSpeedBonus : 1) * (p.boosted ? this.cfg.perfectDodge.boostSpeed : 1) * mods.speed;

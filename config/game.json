@@ -1,6 +1,6 @@
 {
   "_comment": "Shared gameplay configuration. Read by the browser client (src/core/config.js) AND the Python server (server/config.py). Change values here, not in code.",
-  "version": "1.02",
+  "version": "1.03",
 
   "tick": {
     "_comment": "netSendHz: client movement updates AND server snapshots per second. Remote players are drawn interpDelayMs in the past at most; the client adapts the delay to the measured jitter (minInterpDelayMs..interpDelayMs).",
@@ -107,7 +107,8 @@
     "decoy":     { "name": "Decoy",       "price": 250, "cooldown": 14, "duration": 4.5 },
     "grapple":   { "name": "Grapple",     "price": 300, "cooldown": 10, "range": 24, "speed": 24, "maxTime": 1.4 },
     "cloak":     { "name": "Cloak",       "price": 350, "cooldown": 18, "duration": 4 },
-    "shockwave": { "name": "Shockwave",   "price": 450, "cooldown": 16, "radius": 6, "force": 15, "lift": 7 }
+    "shockwave": { "name": "Shockwave",   "price": 450, "cooldown": 16, "radius": 6, "force": 15, "lift": 7 },
+    "scramble":  { "name": "Scramble",    "price": 400, "cooldown": 15, "radius": 9, "duration": 3.5 }
   },
 
   "match": {

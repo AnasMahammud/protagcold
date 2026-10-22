@@ -2,7 +2,9 @@
 
 A fast 3D parkour tag game. Vault, slide, mantle, wall-jump and dodge across seven arenas, from neon rooftops to an overgrown abandoned mall, a giant waterpark and a toy factory. Play six modes (including Hot Potato and Shrinking Zone) offline against bots, or online against friends through the included authoritative server.
 
-**Current version: v1.02.** The first time you open a new version, a *What's new* screen lists the changes (you can reopen it from the main menu).
+**Current version: v1.03.** The first time you open a new version, a *What's new* screen lists the changes (you can reopen it from the main menu).
+
+Every match opens with a short cutscene: the camera circles the arena with its name, the mode and who's playing, then swoops down behind you for the countdown. Any key or a click skips it.
 
 **No installation beyond Python.** The game runs in any modern browser (Chrome, Edge or Firefox). The server is plain Python 3 with no `pip install`.
 
@@ -88,7 +90,7 @@ Online, the server schedules the events so everyone gets the same one at the sam
 | Dodge | Q or right mouse | LB | Dodge button |
 | Vault / climb | E (also automatic) | X | Vault button |
 | Ability slot 1 / 2 | F / R | Y / RT | Ability buttons (show the equipped icons) |
-| Emotes | 1 · 2 · 3 | D-pad | — |
+| Emotes: wave, groove, flex, Griddy, Buggin', robot | 1 – 6 | D-pad ↑ ← →, R3 cycles the new ones | — |
 | Scoreboard | Tab | View | — |
 | Practice: swap IT | T | D-pad ↓ | — |
 | Pause | Esc / P | Menu | ❚❚ |
@@ -123,12 +125,13 @@ Spend **coins** in the **Abilities** shop (main menu) and equip two abilities, o
 | Grapple | 300 | 10 s | Fire a hook at whatever is under your crosshair (up to 24 m) and zip to it. The crosshair turns into a green ring when a surface is in range. Jump to let go early. |
 | Cloak | 350 | 18 s | Turn almost invisible for 4 s: no name tag, no HUD arrow pointing at you, and bots lose track of you beyond 3 m. |
 | Shockwave | 450 | 16 s | Blast everyone within 6 m away from you and into the air. Escape a corner, or knock runners off a roof. |
+| Scramble (new) | 400 | 15 s | Glitch everyone within 9 m who can see you: for 3.5 s their controls are inverted, mirrored (with jump and slide swapped) or spun 90°. Stop a chaser cold, or as IT make a runner stumble into you. |
 
 **Earning coins:** every match pays out for playing (+15), tags (+4 each), survival (+1 per 10 s), winning (+25) and perfect dodges (+8 each). On top of that, **10 gold coins** are scattered around every arena (+3 each, respawning after 18 s), mostly up high on rooftops and platforms, so parkour pays. New players start with 100 coins: enough for Blink.
 
-**Bots** get random abilities on Normal (one) and Hard (two) and use them tactically: blinking, cloaking or shockwaving away when IT is on them, rocket-jumping up to runners above them, and grabbing coins when nobody's chasing them.
+**Bots** get random abilities on Normal (one) and Hard (two) and use them tactically: blinking, cloaking, shockwaving or scrambling when IT is on them, rocket-jumping up to runners above them, scrambling a runner who's just out of reach, and grabbing coins when nobody's chasing them. A scrambled bot stumbles about too.
 
-**Online**, the server validates every ability: it must be in the loadout you joined with and off cooldown, Blink must land somewhere legal, and the Grapple anchor must be in range. The server grants exactly the extra movement that ability allows (so the anti-cheat doesn't snap you back), decides who a Shockwave hits and pushes them, and owns every map coin: it spawns them, checks you were really standing at a coin before counting it, and pays coins out with the match result.
+**Online**, the server validates every ability: it must be in the loadout you joined with and off cooldown, Blink must land somewhere legal, and the Grapple anchor must be in range. The server grants exactly the extra movement that ability allows (so the anti-cheat doesn't snap you back), decides who a Shockwave hits and pushes them, decides who a Scramble hits (and how their controls get mixed up), and owns every map coin: it spawns them, checks you were really standing at a coin before counting it, and pays coins out with the match result.
 
 All the numbers are in `config/game.json` under `abilities` and `coins`.
 
@@ -196,7 +199,7 @@ Everything in Settings changes the real game and is saved on your device:
 - **Audio:** master, music and SFX volume.
 - **Controls:** mouse X/Y, controller and touch sensitivity, invert Y, always-sprint, full key rebinding.
 - **Camera:** FOV, distance, speed-FOV, shake, landing dip.
-- **Graphics:** Low/Medium/High/Ultra presets, resolution scale, dynamic resolution (lowers the resolution a little only while the graphics card can't keep up), frame-rate limit, FPS counter, fullscreen.
+- **Graphics:** Low/Medium/High/Ultra presets, resolution scale, dynamic resolution (lowers the resolution a little only while the graphics card can't keep up), map intro cutscene on/off, motion blur (slight: fast camera turns and top speed, your character stays sharp; not on Low or with *Reduce flashing*), frame-rate limit, FPS counter, fullscreen.
 - **Accessibility:** reduce flashing and shake, HUD scale, larger text, perfect-dodge assist.
 - **Network:** custom server address.
 
@@ -204,7 +207,7 @@ On first launch the game picks a preset to suit your GPU.
 
 ## Progression
 
-You earn XP and coins for every match. The results screen breaks both down. XP comes from participation, tags, survival time, wins, and a top-3 bonus. Levels unlock cosmetics: suit, trim and accent colours, 10 hats, trails, tag effects and emotes. Some unlock through achievements (wins, lifetime tags, total survival time). Cosmetics never change gameplay. Coins buy abilities (see above). The Profile screen shows lifetime stats and recent matches. Everything is earned by playing: there is no real-money shop and no loot boxes.
+You earn XP and coins for every match. The results screen breaks both down. XP comes from participation, tags, survival time, wins, and a top-3 bonus. Levels unlock cosmetics: suit (shell), trim (joints) and accent colours, 10 hats, trails, tag effects and emotes (the Griddy and Buggin' are free for everyone; the robot unlocks at level 8). Some unlock through achievements (wins, lifetime tags, total survival time). Cosmetics never change gameplay. Coins buy abilities (see above). The Profile screen shows lifetime stats and recent matches. Everything is earned by playing: there is no real-money shop and no loot boxes.
 
 ---
 
@@ -221,15 +224,16 @@ src/
   movement/     collision world (AABB + ramps, grid broad-phase, water/conveyor zones, slide paths)
                 and the character controller
   gameplay/     rules engine, Game (renderer/loop), session base, offline LocalMatch,
-                abilities (AbilitySystem), map coins (MapCoins), map events (mapEvents.js)
+                abilities (AbilitySystem), map coins (MapCoins), map events (mapEvents.js),
+                the pre-match cutscene (intro.js)
   multiplayer/  WebSocket client, OnlineMatch (prediction + interpolation)
   ai/           navigation graph + A*, bot brain
-  player/       procedural character model + animation, Player entity
+  player/       procedural "mannequin" character (one skinned mesh) + animation and emotes, Player entity
   camera/       third-person camera rig
   maps/         map loader, renderer, static batching (batch.js), procedural textures,
                 decor prefabs (decor.js, decor2.js), sky/backgrounds
   effects/      pooled particles, rings, trails, lightning, perfect-dodge cinematic,
-                screen shader, ability effects, shrinking-zone wall (zoneFx.js)
+                screen shader, ability effects, shrinking-zone wall (zoneFx.js), motion blur (motionBlur.js)
   audio/        synthesised SFX engine + procedural music sequencer
   progression/  XP/levels/stats, cosmetics catalogue
   ui/           menus (incl. the Abilities shop), HUD, touch controls, ability icons,
@@ -255,11 +259,11 @@ See **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for the technical design an
 ## Tests
 
 ```bash
-python -m unittest discover -s tests -v                      # 79 server, rules, integration, social, hosting, publishing, perfect-dodge, ability, coin, new-mode, map-event and map-feature tests
-# with the server running, open http://localhost:8080/tests/browser/   (128 browser tests)
+python -m unittest discover -s tests -v                      # 81 server, rules, integration, social, hosting, publishing, perfect-dodge, ability, coin, new-mode, map-event and map-feature tests
+# with the server running, open http://localhost:8080/tests/browser/   (140 browser tests)
 ```
 
-Latest results: **79/79 Python tests** and **128/128 browser tests** passing. Details, the manual verification checklist, and what could not be tested are in **[docs/TESTING.md](docs/TESTING.md)**.
+Latest results: **81/81 Python tests** and **140/140 browser tests** passing. Details, the manual verification checklist, and what could not be tested are in **[docs/TESTING.md](docs/TESTING.md)**.
 
 ## Requirements and performance
 
@@ -284,7 +288,8 @@ Also listed in [docs/TESTING.md](docs/TESTING.md#limitations).
 - **Bots are offline only.** Online rooms are human players (minimum 2).
 - **Progression is stored locally** in the browser, including coins and which abilities you own. Online XP and coins are computed by the server, but local storage can still be edited by the player, so this isn't tamper-proof persistence. Online, the server can't know what you *bought*; it enforces the loadout shape (2 slots, no duplicates), the cooldowns, and every ability's effect.
 - **Anti-cheat is practical, not perfect:** the server validates speed, teleports, solids and freeze, and checks tags with lag compensation, but it doesn't re-simulate full movement physics.
-- **Characters are built from procedural primitives** (merged into one skinned mesh) and animated procedurally; there are no authored or motion-captured models.
+- **Characters are built from procedural shapes** (sculpted shell plates and ball joints merged into one skinned mesh) and animated procedurally, emotes included; there are no authored or motion-captured models.
+- **Scramble is applied by the victim's own game online.** The server decides who is hit and how, but a modified client could ignore it (the same goes for any client-side input effect).
 - **Not tested on real hardware here:** gamepads, physical touch devices, and real internet latency. Each is implemented to the standard browser APIs; see TESTING.md.
 - **There's no Exit button.** It isn't applicable in a browser: close the tab, or stop the server with Ctrl+C.
 - **No moving platforms.** Jump pads, conveyor belts, escalators and water slides are the dynamic traversal.

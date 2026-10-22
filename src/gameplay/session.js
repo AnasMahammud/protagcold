@@ -8,10 +8,11 @@ import { MS } from '../movement/controller.js';
 import { Player } from '../player/player.js';
 import { formatTime } from '../core/mathUtil.js';
 import { progression } from '../progression/progression.js';
-import { AbilitySystem } from './abilities.js';
+import { AbilitySystem, scrambleStick, SCRAMBLE_HINT } from './abilities.js';
 import * as AFX from '../effects/abilityFx.js';
 import { ZoneVisual } from '../effects/zoneFx.js';
 import { MapEventDirector, EVENT_INFO, eventMods } from './mapEvents.js';
+import { MatchIntro } from './intro.js';
 
 export class MatchSession {
   constructor(game, opts) {
@@ -40,6 +41,21 @@ export class MatchSession {
     this.abilities = new AbilitySystem(this);
     this.coins = null; // MapCoins, created by the subclass once the map is known
     this.grappleTarget = null;
+    this.intro = null; // pre-match cutscene while it plays
+  }
+
+  /** Play the pre-match map cutscene; resolves when it ends (or is skipped). */
+  playIntro(opts = {}) {
+    return new Promise((resolve) => {
+      if (this.disposed || this.attract) return resolve();
+      this.intro = new MatchIntro(this, {
+        ...opts,
+        onDone: () => {
+          this.intro = null;
+          resolve();
+        },
+      });
+    });
   }
 
   get world() {
@@ -77,13 +93,19 @@ export class MatchSession {
   mapInput(cmd) {
     const f = this.game.cameraRig.forward();
     const r = this.game.cameraRig.right();
+    let mx = cmd.mx, my = cmd.my;
+    const local = this.local;
+    // Scramble: the stick is remapped in the frame the player steers in (the camera)
+    const mode = local && this.abilities.isScrambled(local) ? local.scrambleMode : null;
+    if (mode) [mx, my] = scrambleStick(mx, my, mode);
+    const swap = mode === 'mirror';
     return {
-      mx: r.x * cmd.mx + f.x * cmd.my,
-      mz: r.z * cmd.mx + f.z * cmd.my,
-      jumpPressed: cmd.jumpPressed,
-      jumpHeld: cmd.jumpHeld,
+      mx: r.x * mx + f.x * my,
+      mz: r.z * mx + f.z * my,
+      jumpPressed: swap ? cmd.slidePressed : cmd.jumpPressed,
+      jumpHeld: swap ? true : cmd.jumpHeld,
       sprint: cmd.sprint,
-      slidePressed: cmd.slidePressed,
+      slidePressed: swap ? cmd.jumpPressed : cmd.slidePressed,
       dodgePressed: cmd.dodgePressed,
       vaultPressed: cmd.vaultPressed,
     };
@@ -94,8 +116,10 @@ export class MatchSession {
     const input = this.game.input;
     const cmd = input.sample(dt);
     const local = this.local;
-    const canControl = !!local && !this.inputBlocked && !this.paused && !local.out && !this.attract;
-    if (cmd.pausePressed && !this.attract) bus.emit('game:pauseToggle');
+    const canControl = !!local && !this.inputBlocked && !this.paused && !local.out && !this.attract && !this.intro;
+    if (this.intro) {
+      if (cmd.pausePressed || cmd.jumpPressed || cmd.vaultPressed) this.intro.skip(); // keyboard, mouse and pad
+    } else if (cmd.pausePressed && !this.attract) bus.emit('game:pauseToggle');
     this.scoreboardHeld = cmd.scoreboard && !this.attract;
     if (canControl || (local?.out && !this.paused)) this.game.cameraRig.applyLook(cmd.lookX, cmd.lookY);
     if (canControl && cmd.emote && local.ctrl.grounded && local.ctrl.horizontalSpeed < 1.5) {
@@ -302,6 +326,10 @@ export class MatchSession {
 
   updateCamera(dt, time) {
     const rig = this.game.cameraRig;
+    if (this.intro) {
+      this.intro.update(dt, time);
+      return;
+    }
     if (this.attract) {
       const subject = this.attractSubject();
       if (subject) rig.updateCinematicFollow(dt, subject.renderPos, time);
@@ -540,6 +568,7 @@ export class MatchSession {
         angle: Math.atan2(rv.zone.x - local.renderPos.x, -(rv.zone.z - local.renderPos.z)) + this.game.cameraRig.yaw,
       } : null,
       grappleOk: !!this.grappleTarget,
+      scrambled: local && this.abilities.isScrambled(local) ? { left: this.abilities.scrambleLeft(local), hint: SCRAMBLE_HINT[local.scrambleMode] } : null,
       cloaked: !!local && this.abilities.isCloaked(local),
       coinsGrabbed: this.coins?.collected || 0,
     };
@@ -598,6 +627,7 @@ export class MatchSession {
   }
 
   dispose() {
+    this.intro?.dispose();
     this.events?.dispose();
     this.zoneFx?.dispose();
     this.abilities.dispose();

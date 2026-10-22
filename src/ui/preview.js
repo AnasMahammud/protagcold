@@ -1,6 +1,6 @@
 // Live 3D character preview for the customisation screen (its own small renderer).
 import * as THREE from 'three';
-import { CharacterModel } from '../player/characterModel.js';
+import { CharacterModel, EMOTE_TIME } from '../player/characterModel.js';
 import { MS } from '../movement/controller.js';
 
 export class CharacterPreview {
@@ -62,7 +62,7 @@ export class CharacterPreview {
   setMode(mode) {
     this.mode = mode;
     if (!this.model) return;
-    if (['wave', 'dance', 'flex'].includes(mode)) this.model.playEmote(mode);
+    if (EMOTE_TIME[mode]) this.model.playEmote(mode);
     else this.model.emote = null;
   }
 
@@ -81,7 +81,7 @@ export class CharacterPreview {
         const run = this.mode === 'run';
         const sp = run ? 7.5 : 0;
         this.model.update({ x: 0, y: 0, z: 0, yaw: this.yaw, vx: -Math.sin(this.yaw) * sp, vy: 0, vz: -Math.cos(this.yaw) * sp, state: MS.GROUND, grounded: true, sprinting: false, scriptProgress: 0, groundY: 0 }, dt, this.time);
-        if (this.model.emote) this.model.emoteT = Math.min(this.model.emoteT, 2.0);
+        if (this.model.emote && this.model.emoteT > EMOTE_TIME[this.model.emote] - 0.1) this.model.emoteT = 0; // loop it
       }
       this.renderer.render(this.scene, this.camera);
     };

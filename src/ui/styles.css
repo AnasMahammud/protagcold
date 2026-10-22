@@ -536,3 +536,48 @@ body.touch-ui #hud .abslots { display: none; }
 .cl-old summary { cursor: pointer; font-size: 14px; color: #e6ecf7; }
 .cl-old summary span { color: var(--muted); font-size: 12px; margin-left: 6px; }
 .cl-old .cl-sec { margin-top: 10px; }
+
+/* ---------------------------------------------------------------- scramble (v1.03) */
+.scramble-fx { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity 0.2s; mix-blend-mode: screen;
+  background: repeating-linear-gradient(0deg, rgba(125, 255, 107, 0.07) 0 2px, transparent 2px 5px),
+    radial-gradient(ellipse at center, transparent 55%, rgba(125, 255, 107, 0.22) 100%); }
+.scramble-fx.on { opacity: 1; animation: scramble-jitter 0.18s steps(2) infinite; }
+@keyframes scramble-jitter {
+  0% { transform: translate(0, 0); filter: hue-rotate(0deg); }
+  50% { transform: translate(-3px, 1px); filter: hue-rotate(90deg); }
+  100% { transform: translate(2px, -1px); filter: hue-rotate(200deg); }
+}
+.scramble-fx.on.calm { animation: none; }
+.status.scrambled { color: #7dff6b; border-color: rgba(125, 255, 107, 0.6); }
+
+/* ---------------------------------------------------------------- map intro cutscene (v1.03) */
+.intro { position: fixed; inset: 0; z-index: 40; pointer-events: none; font-family: inherit; }
+.intro-bar { position: absolute; left: 0; right: 0; height: 11vh; background: #000; transition: transform 0.6s cubic-bezier(0.2, 0.8, 0.2, 1); }
+.intro-bar.top { top: 0; transform: translateY(-100%); animation: intro-bar-in 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) forwards; }
+.intro-bar.bottom { bottom: 0; transform: translateY(100%); animation: intro-bar-in 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) forwards; }
+@keyframes intro-bar-in { to { transform: translateY(0); } }
+.intro.gone .intro-bar.top { animation: none; transform: translateY(-100%); }
+.intro.gone .intro-bar.bottom { animation: none; transform: translateY(100%); }
+.intro-card { position: absolute; left: 6vw; bottom: calc(11vh + 4vh); max-width: min(720px, 80vw); transition: opacity 0.35s, transform 0.35s; }
+.intro.out .intro-card { opacity: 0; transform: translateX(-30px); }
+.intro-card::before { content: ''; position: absolute; inset: -60px -120px -40px -8vw; z-index: -1; background: radial-gradient(ellipse at 35% 60%, rgba(4, 6, 12, 0.62), rgba(4, 6, 12, 0) 70%); }
+.intro-card > * { opacity: 0; transform: translateY(14px); animation: intro-in 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) forwards; }
+.intro-card > :nth-child(1) { animation-delay: 0.35s; }
+.intro-card > :nth-child(2) { animation-delay: 0.5s; }
+.intro-card > :nth-child(3) { animation-delay: 0.75s; }
+.intro-card > :nth-child(4) { animation-delay: 1.0s; }
+.intro-card > :nth-child(5) { animation-delay: 1.3s; }
+@keyframes intro-in { to { opacity: 1; transform: none; } }
+.intro-mode { display: flex; gap: 8px; flex-wrap: wrap; }
+.intro-mode span { font-size: 12px; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase; color: #0b0d12; background: var(--ember, #ff5a3d); padding: 4px 10px; border-radius: 4px; }
+.intro-mode span + span { background: rgba(255, 255, 255, 0.92); }
+.intro-map { margin-top: 10px; font-size: clamp(38px, 7vw, 86px); font-weight: 900; font-style: italic; line-height: 0.95; letter-spacing: -0.01em; text-transform: uppercase; color: #fff;
+  text-shadow: 0 4px 24px rgba(0, 0, 0, 0.55), 3px 3px 0 rgba(255, 90, 61, 0.65); }
+.intro-desc { margin-top: 10px; font-size: 16px; line-height: 1.45; color: #e8edf6; text-shadow: 0 2px 10px rgba(0, 0, 0, 0.8); max-width: 600px; }
+.intro-players { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 6px; }
+.intro-players span { font-size: 13px; font-weight: 700; color: #fff; background: rgba(8, 10, 18, 0.55); border-left: 4px solid var(--c, #fff); padding: 3px 9px 3px 7px; border-radius: 4px; }
+.intro-players span.me { background: rgba(255, 210, 61, 0.25); }
+.intro-obj { margin-top: 12px; font-size: 15px; font-weight: 800; color: var(--sun, #ffd23d); text-shadow: 0 2px 8px rgba(0, 0, 0, 0.8); }
+.intro-skip { position: absolute; right: 4vw; bottom: 3.5vh; font-size: 13px; color: rgba(255, 255, 255, 0.75); opacity: 0; animation: intro-in 0.6s 1.2s forwards; }
+.intro.out .intro-skip { opacity: 0; animation: none; }
+@media (max-width: 700px) { .intro-desc { display: none; } .intro-card { left: 16px; right: 16px; } }

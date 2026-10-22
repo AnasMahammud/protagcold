@@ -1,8 +1,34 @@
 // Game version + update history. Every update bumps VERSION and adds an entry at the TOP of
 // CHANGELOG: the first time a player opens a new version, the "What's new" screen shows it.
-export const VERSION = '1.02';
+export const VERSION = '1.03';
 
 export const CHANGELOG = [
+  {
+    version: '1.03',
+    date: '2026-10-22',
+    title: 'Scramble, the Griddy & a new look',
+    sections: [
+      ['New ability: Scramble', [
+        'Glitch everyone within 9 m who can see you: for 3.5 s their controls are inverted, mirrored (with jump and slide swapped) or spun 90°. 400 coins in the Abilities shop.',
+        'Use it to stop a chaser in their tracks, or as IT to make a runner stumble straight into you. Bots use it too.',
+      ]],
+      ['New emotes', [
+        "The Griddy (key 4) and Buggin' (key 5), unlocked for everyone. Plus the Robot (key 6) at level 8.",
+        "Bots sometimes show off their moves while the camera flies over the arena.",
+      ]],
+      ['New characters', [
+        'Every runner is now a sleek mannequin: glossy sculpted shell plates over dark ball joints, a smooth faceless head and proper sneakers.',
+        'New players start in classic pearl white. Your colours, headwear and trails still apply (Customise).',
+      ]],
+      ['Match intros', [
+        'Before every match the camera slowly circles the arena with its name, the mode and who is playing, then swoops down behind you for the countdown.',
+        'Press any key or click to skip it, or turn it off in Settings → Graphics.',
+      ]],
+      ['Feels smoother', [
+        'A slight motion blur when the camera turns fast and at top speed, keeping your character sharp (Settings → Graphics, off on Low and with "Reduce flashing").',
+      ]],
+    ],
+  },
   {
     version: '1.02',
     date: '2026-10-21',

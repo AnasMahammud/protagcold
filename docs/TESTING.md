@@ -13,9 +13,22 @@ python server/main.py
 
 The browser page shows each result and exposes `window.__TEST_RESULTS__` for automation.
 
-## Latest results (2026-10-21, development machine: Windows 11, Intel UHD GPU, Chromium)
+## Latest results (development machine: Windows 11, Intel UHD GPU, Chromium)
 
-### v1.02: new maps, modes, map events, performance and lag
+### v1.03: Scramble, new emotes, new characters, intro cutscene, motion blur (2026-10-22)
+
+- **Python: 81 / 81 passed.** New: a Scramble online hits the player 5 m away in the open with one of the three modes (the caster is told too) and nobody when they're 27 m away; the Griddy and Buggin' are relayed while an unknown emote id isn't.
+- **Browser: 140 / 140 passed.** New tests:
+  - Scramble remaps controls correctly (inverted, mirrored with jump/slide swapped, spun 90°, in camera and world frames).
+  - Offline Scramble doesn't go through a wall, hits a player 5 m away in sight, never the caster, remaps a scrambled bot's input and wears off after 3.5 s.
+  - Every emote has a key, a duration and a pose that really moves (finite joints every frame); moving cancels an emote.
+  - The character is one skinned mesh with 3 material groups, about 6,600 vertices and 1.95 m tall.
+  - The intro camera's orbit is in the open on every map (at least 16 of 24 points free) and stays under the Mall's and Factory's ceilings.
+  - Motion blur stays off for a still camera, blurs along a turn (no vertical smear for a pure yaw), ignores a camera cut, adds the radial streak at top speed and never runs when switched off.
+- **Real client checks:** the new mannequin close up (pearl white matches the reference look; the user's own red suit and cap still apply); the intro on the Waterpark (outdoor), the Mall (indoor, framed in the atrium) and Rooftops, with the swoop and the hand-off to the countdown; Scramble from the player (two bots in range scrambled, one far away not, the cooldown on the F slot, glitch glyphs over the victims) and on the player (banner, status timer, glitch overlay, W moving backwards when inverted); the Griddy and Buggin' close up and in the Customise preview; motion blur during a fast camera turn (edges smeared, the character sharp); the Scramble card in the shop; the *What's new* screen for v1.03.
+- **Not checked by hand:** how Scramble *feels* to play against real people online; the intro on a slow machine (the server waits up to 16 s for everyone to finish loading and watching).
+
+### v1.02: new maps, modes, map events, performance and lag (2026-10-21)
 
 - **Python: 79 / 79 passed.** New tests:
   - Rule parity (both languages): Hot Potato (tags pass the potato, the fuse keeps burning, the holder explodes, the potato goes to whoever held it least, the fuse gets shorter; with two players the first explosion ends it) and Shrinking Zone (4 s outside knocks a runner out, going back in recovers, IT is immune, the ring closes; survivors win on time).

@@ -250,7 +250,7 @@ export class AudioEngine {
   }
 }
 
-const UI_SOUNDS = new Set(['eventWarn', 'eventStart', 'powerDown', 'powerUp', 'zoneClosing', 'perfectDodge', 'timeResume', 'boost', 'outplayed', 'uiHover', 'uiClick', 'uiBack', 'countdown', 'go', 'victory', 'defeat', 'levelUp', 'unlock', 'error', 'purchase', 'abilityDenied', 'abilityReady']);
+const UI_SOUNDS = new Set(['introRise', 'introWhoosh', 'scrambled', 'eventWarn', 'eventStart', 'powerDown', 'powerUp', 'zoneClosing', 'perfectDodge', 'timeResume', 'boost', 'outplayed', 'uiHover', 'uiClick', 'uiBack', 'countdown', 'go', 'victory', 'defeat', 'levelUp', 'unlock', 'error', 'purchase', 'abilityDenied', 'abilityReady']);
 
 const THROTTLE = {
   footstep: [0.07, 8],
@@ -472,6 +472,31 @@ const SFX = {
     a._noise(out, t, 0.5, { type: 'lowpass', freq: 3000, freqEnd: 150, q: 0.6, gain: 0.5 });
     a._tone(out, t, 0.25, { type: 'sawtooth', freq: 400, freqEnd: 60, gain: 0.12 });
     return 0.8;
+  },
+  introRise(a, out, t) {
+    // the arena reveal: an airy riser and a wide chord
+    a._noise(out, t, 2.2, { freq: 300, freqEnd: 2400, q: 0.5, gain: 0.12, attack: 1.2 });
+    for (const [i, f] of [196, 246.94, 293.66, 392].entries()) a._tone(out, t + 0.35 + i * 0.05, 2.4, { type: 'triangle', freq: f, gain: 0.045, attack: 0.5 });
+    return 2.6;
+  },
+  introWhoosh(a, out, t) {
+    a._noise(out, t, 0.9, { freq: 1800, freqEnd: 250, q: 0.7, gain: 0.3, attack: 0.25 });
+    a._tone(out, t + 0.6, 0.35, { freq: 90, freqEnd: 45, gain: 0.35 });
+    return 1.0;
+  },
+  scramble(a, out, t) {
+    // a glitchy, bit-crushed arpeggio sweeping out from the caster
+    const notes = [1046.5, 1568, 784, 1318.5, 659.25, 1975.5, 880, 1174.7];
+    notes.forEach((f, i) => a._tone(out, t + i * 0.035, 0.05, { type: 'square', freq: f, freqEnd: f * (i % 2 ? 0.7 : 1.3), gain: 0.05 }));
+    a._noise(out, t, 0.45, { type: 'bandpass', freq: 1800, freqEnd: 500, q: 2, gain: 0.25 });
+    a._tone(out, t, 0.4, { type: 'sawtooth', freq: 140, freqEnd: 70, gain: 0.12 });
+    return 0.5;
+  },
+  scrambled(a, out, t) {
+    // your controls just got mixed up: a wobbly descending "error" warble
+    for (let i = 0; i < 5; i++) a._tone(out, t + i * 0.07, 0.07, { type: 'square', freq: 660 - i * 70, freqEnd: 900 - i * 90, gain: 0.05 });
+    a._noise(out, t, 0.3, { type: 'highpass', freq: 3500, q: 0.6, gain: 0.12 });
+    return 0.45;
   },
   knocked(a, out, t) {
     a._tone(out, t, 0.18, { freq: 180, freqEnd: 60, gain: 0.35 });

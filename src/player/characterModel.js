@@ -1,34 +1,103 @@
-// Original stylised "runner" character built from primitives, with a joint hierarchy and
-// procedural animation. Every joint blends toward a target pose each frame, so transitions
-// between run / sprint / jump / slide / vault / mantle / dodge / emotes are always smooth.
+// Original "mannequin" runner: sculpted glossy shell pieces over dark ball joints (faceless egg
+// head, chest and pelvis plates, tapered limbs, sneakers), with a joint hierarchy and procedural
+// animation. Every joint blends toward a target pose each frame, so transitions between run /
+// sprint / jump / slide / vault / mantle / dodge / emotes are always smooth.
 import * as THREE from 'three';
 import { clamp, damp, lerp } from '../core/mathUtil.js';
 import { MS } from '../movement/controller.js';
 import { HATS } from '../progression/cosmetics.js';
 
-const capsule = (r, len, seg = 8) => new THREE.CapsuleGeometry(r, len, 4, seg);
+/**
+ * A smooth revolved shell from a (radius, height) profile listed bottom to top, squashed into an
+ * ellipse (sx across, sz front-to-back; scale() carries the normals along, so it stays smooth).
+ */
+function shell(profile, sx = 1, sz = 1, segs = 20) {
+  const g = new THREE.LatheGeometry(profile.map(([r, y]) => new THREE.Vector2(Math.max(r, 1e-4), y)), segs);
+  g.scale(sx, 1, sz);
+  // baked "ambient occlusion": shells darken where they tuck in toward a joint
+  const P = g.attributes.position;
+  const y0 = profile[0][1], y1 = profile[profile.length - 1][1];
+  const ao = new Float32Array(P.count);
+  const ss = (e, x) => { const t = clamp(x / e, 0, 1); return t * t * (3 - 2 * t); };
+  for (let i = 0; i < P.count; i++) {
+    const t = (P.getY(i) - y0) / (y1 - y0 || 1);
+    ao[i] = 1 - 0.3 * (1 - ss(0.2, t)) - 0.3 * (1 - ss(0.2, 1 - t));
+  }
+  g.setAttribute('ao', new THREE.BufferAttribute(ao, 1));
+  return g;
+}
+const ball = (r, w = 14, h = 10) => new THREE.SphereGeometry(r, w, h);
+const pill = (r, len, sx = 1, sy = 1, sz = 1) => {
+  const g = new THREE.CapsuleGeometry(r, len, 5, 14);
+  g.rotateX(Math.PI / 2); // lies along z (shoes)
+  return g.scale(sx, sy, sz);
+};
 
 const sharedGeo = {
-  pelvis: capsule(0.17, 0.12, 10),
-  torso: capsule(0.2, 0.32, 12),
-  chestPlate: new THREE.BoxGeometry(0.3, 0.2, 0.06),
-  head: new THREE.SphereGeometry(0.175, 20, 14),
-  visor: new THREE.SphereGeometry(0.178, 20, 10, -1.2, 2.4, 1.15, 0.75),
-  visorLine: new THREE.TorusGeometry(0.168, 0.012, 6, 24, 2.2),
-  upperArm: capsule(0.065, 0.2),
-  foreArm: capsule(0.058, 0.18),
-  hand: new THREE.SphereGeometry(0.07, 10, 8),
-  thigh: capsule(0.09, 0.28),
-  shin: capsule(0.078, 0.3),
-  shoe: new THREE.BoxGeometry(0.13, 0.09, 0.27),
-  sole: new THREE.BoxGeometry(0.135, 0.03, 0.28),
+  // head + neck
+  head: shell([[0, -0.17], [0.06, -0.165], [0.1, -0.135], [0.128, -0.085], [0.143, -0.02], [0.146, 0.035], [0.138, 0.09], [0.117, 0.135], [0.083, 0.165], [0.042, 0.18], [0, 0.184]], 0.97, 1.08, 26),
+  neck: shell([[0, -0.03], [0.05, -0.03], [0.046, 0.06], [0.042, 0.16], [0, 0.16]], 1, 1, 14),
+  // torso: a dark core showing through the gaps between the chest, abdomen and pelvis plates
+  core: shell([[0, -0.04], [0.07, -0.04], [0.078, 0.08], [0.082, 0.2], [0.08, 0.32], [0, 0.32]], 1.1, 0.85, 16),
+  abdomen: shell([[0, 0.012], [0.085, 0.016], [0.106, 0.045], [0.11, 0.095], [0.102, 0.14], [0.078, 0.162], [0, 0.165]], 1.02, 0.78),
+  chest: shell([[0, 0.212], [0.09, 0.216], [0.12, 0.238], [0.142, 0.285], [0.165, 0.345], [0.183, 0.395], [0.18, 0.438], [0.152, 0.468], [0.095, 0.486], [0, 0.49]], 1.26, 0.7, 24),
+  waist: new THREE.TorusGeometry(0.084, 0.0065, 6, 30),
+  pelvis: shell([[0, -0.11], [0.08, -0.116], [0.128, -0.092], [0.15, -0.05], [0.154, 0], [0.144, 0.038], [0.112, 0.06], [0, 0.065]], 1.04, 0.74),
+  // arms (hanging down from the shoulder / elbow joints)
+  shoulderBall: ball(0.062),
+  upperArm: shell([[0, -0.288], [0.036, -0.278], [0.046, -0.24], [0.054, -0.16], [0.062, -0.07], [0.068, -0.01], [0.062, 0.035], [0.042, 0.062], [0, 0.068]]),
+  elbowBall: ball(0.042, 12, 8),
+  foreArm: shell([[0, -0.255], [0.028, -0.245], [0.036, -0.21], [0.044, -0.15], [0.047, -0.09], [0.036, -0.045], [0, -0.038]], 1, 1, 16),
+  wristBall: ball(0.028, 10, 6),
+  palm: ball(1, 12, 8),
+  thumb: new THREE.CapsuleGeometry(0.013, 0.04, 3, 8),
+  // legs
+  hipBall: ball(0.066),
+  thigh: shell([[0, -0.4], [0.05, -0.39], [0.062, -0.35], [0.076, -0.27], [0.086, -0.18], [0.086, -0.11], [0.064, -0.058], [0, -0.048]], 1, 1.06),
+  kneeBall: ball(0.05, 12, 8),
+  kneeCap: ball(1, 12, 8),
+  shin: shell([[0, -0.405], [0.034, -0.395], [0.04, -0.35], [0.052, -0.26], [0.062, -0.17], [0.06, -0.12], [0.047, -0.07], [0, -0.062]], 1, 1.1),
+  ankleBall: ball(0.04, 10, 8),
+  shoe: pill(0.058, 0.15, 1, 0.82, 1),
+  sole: pill(0.062, 0.16, 1.02, 0.28, 1),
+  laces: new THREE.BoxGeometry(0.05, 0.02, 0.09),
+  shoeStripe: new THREE.BoxGeometry(0.124, 0.012, 0.15),
   blob: new THREE.CircleGeometry(0.42, 20),
   itRing: new THREE.RingGeometry(0.55, 0.72, 32),
 };
-for (const g of [sharedGeo.upperArm, sharedGeo.foreArm, sharedGeo.thigh, sharedGeo.shin]) {
-  // pivot at the top end so rotations swing the limb from its joint
-  g.computeBoundingBox();
-  g.translate(0, -(g.boundingBox.max.y), 0);
+
+/**
+ * Soft "photo studio" reflections for the glossy shells: a tiny equirectangular gradient with two
+ * bright softboxes. three.js turns it into a prefiltered environment map per renderer by itself.
+ */
+let envTex = null;
+function studioEnv() {
+  if (envTex) return envTex;
+  const c = document.createElement('canvas');
+  c.width = 128; c.height = 64;
+  const x = c.getContext('2d');
+  const g = x.createLinearGradient(0, 0, 0, 64);
+  g.addColorStop(0, '#ffffff');
+  g.addColorStop(0.42, '#c9d2de');
+  g.addColorStop(0.52, '#7d8693');
+  g.addColorStop(1, '#2a2e35');
+  x.fillStyle = g;
+  x.fillRect(0, 0, 128, 64);
+  x.fillStyle = 'rgba(255,255,255,0.95)';
+  x.fillRect(18, 10, 22, 14); // key softbox
+  x.fillRect(82, 14, 14, 10); // rim softbox
+  envTex = new THREE.CanvasTexture(c);
+  envTex.mapping = THREE.EquirectangularReflectionMapping;
+  envTex.colorSpace = THREE.SRGBColorSpace;
+  return envTex;
+}
+// every live character's shell + joint materials (map events dim the reflections in a blackout)
+const LIVE_MATS = new Set();
+let envIntensity = 0.55;
+/** How strongly characters reflect the studio environment (per map lighting / power outage). */
+export function setCharacterEnvIntensity(k) {
+  envIntensity = k;
+  for (const m of LIVE_MATS) m.envMapIntensity = k * (m.userData.envK || 1);
 }
 
 let blobTex = null;
@@ -79,11 +148,10 @@ class Joint {
   }
 }
 
-// Material groups of the merged body: 0 = suit (standard, vertex colours), 1 = visor (shiny),
-// 2 = glowing accents (unlit). One draw call each instead of one per body part.
-const GROUP = { primary: 0, secondary: 0, dark: 0, sole: 0, hat: 0, visor: 1, accent: 2, hatGlow: 2 };
-const FIXED = { dark: '#15171c', sole: '#f2f2f2', visor: '#0b0d12' };
-const stripeGeo = new THREE.BoxGeometry(0.42, 0.035, 0.02);
+// Material groups of the merged body: 0 = glossy shells (vertex colours), 1 = satin joints, hands
+// and laces, 2 = glowing accents (unlit). One draw call each instead of one per body part.
+const GROUP = { primary: 0, shoe: 0, sole: 0, hat: 0, secondary: 1, dark: 1, accent: 2, hatGlow: 2 };
+const FIXED = { dark: '#15171c', shoe: '#f4f5f8', sole: '#d6dae1' };
 
 export class CharacterModel {
   constructor(cosmetics) {
@@ -92,12 +160,15 @@ export class CharacterModel {
     this.body = new THREE.Group(); // gets yaw + bob
     this.root.add(this.body);
 
+    const env = studioEnv();
     this.mats = {
-      body: new THREE.MeshStandardMaterial({ roughness: 0.58, metalness: 0.08, vertexColors: true }),
-      visor: new THREE.MeshStandardMaterial({ roughness: 0.12, metalness: 0.85, vertexColors: true }),
+      body: new THREE.MeshPhysicalMaterial({ roughness: 0.42, metalness: 0, clearcoat: 0.65, clearcoatRoughness: 0.22, vertexColors: true, envMap: env, envMapIntensity: envIntensity }),
+      joint: new THREE.MeshStandardMaterial({ roughness: 0.42, metalness: 0.45, vertexColors: true, envMap: env, envMapIntensity: envIntensity * 0.8 }),
       glow: new THREE.MeshBasicMaterial({ vertexColors: true }),
     };
+    this.mats.joint.userData.envK = 0.8;
     this.mats.glow.toneMapped = false;
+    LIVE_MATS.add(this.mats.body).add(this.mats.joint);
 
     // --- skeleton
     this.hips = new Joint('hips', this.body, 0, 0.94, 0);
@@ -179,23 +250,37 @@ export class CharacterModel {
       j, geo, slot,
       matrix: new THREE.Matrix4().compose(new THREE.Vector3(...pos), new THREE.Quaternion().setFromEuler(e.set(...rot)), new THREE.Vector3(...scl)),
     });
-    part(this.hips, sharedGeo.pelvis, 'secondary', [0, 0, 0], [0, 0, Math.PI / 2]);
-    part(this.spine, sharedGeo.torso, 'primary', [0, 0.24, 0]);
-    part(this.spine, sharedGeo.chestPlate, 'secondary', [0, 0.3, 0.18]);
-    part(this.spine, stripeGeo, 'accent', [0, 0.3, 0.205], [0, 0, 0], [0.7, 1, 1]);
-    part(this.head, sharedGeo.head, 'primary', [0, 0.02, 0]);
-    part(this.head, sharedGeo.visor, 'visor', [0, 0.02, 0], [0, Math.PI / 2, 0]); // model faces +Z internally
-    part(this.head, sharedGeo.visorLine, 'accent', [0, -0.005, 0], [Math.PI / 2, 0, Math.PI / 2 - 1.1]);
-    for (const [sh, el] of [[this.shoulderL, this.elbowL], [this.shoulderR, this.elbowR]]) {
-      part(sh, sharedGeo.upperArm, 'primary');
-      part(el, sharedGeo.foreArm, 'secondary');
-      part(el, sharedGeo.hand, 'dark', [0, -0.31, 0]);
+    const G = sharedGeo;
+    // torso (the model faces +Z internally)
+    part(this.hips, G.pelvis, 'primary');
+    part(this.spine, G.core, 'secondary');
+    part(this.spine, G.abdomen, 'primary');
+    part(this.spine, G.chest, 'primary');
+    part(this.spine, G.waist, 'accent', [0, 0.19, 0], [Math.PI / 2, 0, 0], [1.13, 0.86, 1]);
+    part(this.neck, G.neck, 'secondary');
+    part(this.head, G.head, 'primary', [0, 0.02, 0.005]);
+    for (const [sh, el, side] of [[this.shoulderL, this.elbowL, 1], [this.shoulderR, this.elbowR, -1]]) {
+      part(sh, G.shoulderBall, 'secondary');
+      part(sh, G.upperArm, 'primary');
+      part(el, G.elbowBall, 'secondary');
+      part(el, G.foreArm, 'primary');
+      part(el, G.wristBall, 'secondary', [0, -0.27, 0]);
+      // hand: palm facing the leg, fingers slightly curled, thumb in front
+      part(el, G.palm, 'secondary', [0, -0.33, 0], [0, 0, 0], [0.026, 0.055, 0.045]);
+      part(el, G.palm, 'secondary', [0, -0.378, 0.01], [0.25, 0, 0], [0.022, 0.04, 0.04]);
+      part(el, G.thumb, 'secondary', [side * 0.012, -0.32, 0.042], [-0.55, 0, 0]);
     }
     for (const [hp, kn, an] of [[this.hipL, this.kneeL, this.ankleL], [this.hipR, this.kneeR, this.ankleR]]) {
-      part(hp, sharedGeo.thigh, 'secondary');
-      part(kn, sharedGeo.shin, 'primary');
-      part(an, sharedGeo.shoe, 'dark', [0, 0.01, 0.05]);
-      part(an, sharedGeo.sole, 'sole', [0, -0.04, 0.05]);
+      part(hp, G.hipBall, 'secondary');
+      part(hp, G.thigh, 'primary');
+      part(kn, G.kneeBall, 'secondary');
+      part(kn, G.kneeCap, 'primary', [0, -0.005, 0.045], [0, 0, 0], [0.048, 0.055, 0.03]);
+      part(kn, G.shin, 'primary');
+      part(an, G.ankleBall, 'secondary', [0, 0.07, 0]);
+      part(an, G.shoe, 'shoe', [0, 0.035, 0.045]);
+      part(an, G.sole, 'sole', [0, -0.008, 0.045]);
+      part(an, G.laces, 'dark', [0, 0.078, 0.075], [-0.25, 0, 0]);
+      part(an, G.shoeStripe, 'accent', [0, 0.012, 0.03]);
     }
     return P;
   }
@@ -205,7 +290,7 @@ export class CharacterModel {
    * rest pose and rigidly bound to its joint's bone, with its colour as a vertex colour.
    */
   _buildBody(c) {
-    const colors = { primary: c.primary || '#ff5a3d', secondary: c.secondary || '#20242e', accent: c.accent || '#3df5ff', ...FIXED };
+    const colors = { primary: c.primary || '#eef1f5', secondary: c.secondary || '#20242e', accent: c.accent || '#3df5ff', ...FIXED };
     const parts = this._parts();
     const temp = []; // hat geometries, disposed once merged
     // hat meshes become parts too (bound to the head), keeping each hat material's colour
@@ -235,14 +320,15 @@ export class CharacterModel {
       const start = idx.length;
       for (const b of buckets[gi]) {
         const base = pos.length / 3;
-        const P = b.geo.attributes.position, N = b.geo.attributes.normal;
+        const P = b.geo.attributes.position, N = b.geo.attributes.normal, AO = b.geo.attributes.ao;
         nm.getNormalMatrix(b.m);
         for (let i = 0; i < P.count; i++) {
           v.fromBufferAttribute(P, i).applyMatrix4(b.m);
           pos.push(v.x, v.y, v.z);
           v.fromBufferAttribute(N, i).applyMatrix3(nm).normalize();
           nor.push(v.x, v.y, v.z);
-          col.push(b.color.r, b.color.g, b.color.b);
+          const k = AO && gi !== 2 ? AO.getX(i) : 1;
+          col.push(b.color.r * k, b.color.g * k, b.color.b * k);
           si.push(b.bone, 0, 0, 0);
           sw.push(1, 0, 0, 0);
         }
@@ -260,7 +346,7 @@ export class CharacterModel {
     g.setAttribute('skinWeight', new THREE.Float32BufferAttribute(sw, 4));
     g.setIndex(idx);
     groups.forEach(([s0, n], i) => g.addGroup(s0, n, i));
-    const mesh = new THREE.SkinnedMesh(g, [this.mats.body, this.mats.visor, this.mats.glow]);
+    const mesh = new THREE.SkinnedMesh(g, [this.mats.body, this.mats.joint, this.mats.glow]);
     mesh.name = 'body';
     mesh.bind(this.skeleton, new THREE.Matrix4()); // bound in the rest pose at the body's origin
     mesh.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 1.0, 0), 1.7);
@@ -390,6 +476,32 @@ export class CharacterModel {
     if (this.stunStars) this.stunStars.visible = on;
   }
 
+  /** Scrambled controls: glitchy "?" glyphs twitch round the head while it lasts. */
+  setScrambled(on, time = 0) {
+    if (!on && !this.scrambleFx) return;
+    if (on && !this.scrambleFx) {
+      const g = new THREE.Group();
+      for (let i = 0; i < 3; i++) {
+        const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: glitchTexture(i), transparent: true, depthWrite: false }));
+        s.scale.setScalar(0.32);
+        s.userData.a = (i / 3) * Math.PI * 2;
+        g.add(s);
+      }
+      g.position.y = 2.15;
+      this.root.add(g);
+      this.scrambleFx = g;
+    }
+    const g = this.scrambleFx;
+    g.visible = on && !this.cloakOn;
+    if (!g.visible) return;
+    for (const s of g.children) {
+      const a = s.userData.a + time * 2.4;
+      const jit = Math.random() < 0.2 ? (Math.random() - 0.5) * 0.12 : 0;
+      s.position.set(Math.cos(a) * 0.36 + jit, Math.sin(time * 9 + s.userData.a) * 0.06, Math.sin(a) * 0.36);
+      s.material.opacity = Math.random() < 0.08 ? 0.25 : 1;
+    }
+  }
+
   /** Every material on the body, hats included. */
   _allMats() {
     if (!this._matList) {
@@ -483,7 +595,7 @@ export class CharacterModel {
     if (this.tagLungeT > 0) this.tagLungeT = Math.max(0, this.tagLungeT - dt);
     if (this.emote) {
       this.emoteT += dt;
-      if (this.emoteT > 2.6 || hs > 1.5 || !s.grounded) this.emote = null;
+      if (this.emoteT > (EMOTE_TIME[this.emote] || 2.6) || hs > 1.5 || !s.grounded) this.emote = null;
     }
 
     let rootY = 0;
@@ -574,7 +686,9 @@ export class CharacterModel {
       J.ankleL.set(0.3); J.ankleR.set(0.2);
       lambda = 10;
     } else if (this.emote && hs < 1.5) {
-      this.poseEmote(time);
+      const e = this.poseEmote(time);
+      rootY = e.rootY || 0;
+      lambda = e.lambda || 16;
     } else if (hs > 0.4) {
       // locomotion: stride length grows with speed
       const sprint = clamp((hs - 7) / 3, 0, 1);
@@ -681,12 +795,74 @@ export class CharacterModel {
     }
   }
 
+  /** Sets the joint targets for the current emote; returns { rootY, lambda } for the body. */
   poseEmote(time) {
     const J = this;
     const t = this.emoteT;
     J.hips.set(0, 0, 0); J.neck.set(0); J.head.set(0);
     J.kneeL.set(0.05); J.kneeR.set(0.05); J.ankleL.set(0); J.ankleR.set(0);
     J.hipL.set(0, 0, 0.05); J.hipR.set(0, 0, -0.05);
+    if (this.emote === 'griddy') {
+      // the Griddy: heel taps on alternating feet, arms swinging, every 4th beat the "glasses"
+      const f = t * 2.3; // beats per second
+      const beat = Math.floor(f), p = f - beat;
+      const left = beat % 2 === 0;
+      const tap = Math.sin(p * Math.PI);
+      const glasses = beat % 4 === 3;
+      const kick = (hip, knee, ankle, out) => { hip.set(-0.62 * tap, 0, out); knee.set(0.35 * (1 - tap) + 0.1); ankle.set(-0.55 * tap); };
+      const plant = (hip, knee, ankle, out) => { hip.set(0.12, 0, out); knee.set(0.42 + 0.12 * tap); ankle.set(0.2); };
+      if (left) { kick(J.hipL, J.kneeL, J.ankleL, 0.06); plant(J.hipR, J.kneeR, J.ankleR, -0.06); }
+      else { kick(J.hipR, J.kneeR, J.ankleR, -0.06); plant(J.hipL, J.kneeL, J.ankleL, 0.06); }
+      const s = left ? 1 : -1;
+      J.hips.set(0.05, s * 0.18 * tap, 0);
+      J.spine.set(0.22, -s * 0.22 * tap, 0);
+      J.neck.set(-0.12); J.head.set(-0.05, s * 0.1, 0);
+      if (glasses) {
+        // hands make goggles round the eyes
+        J.shoulderL.set(-2.25, 0.2, 0.55); J.elbowL.set(-2.35);
+        J.shoulderR.set(-2.25, -0.2, -0.55); J.elbowR.set(-2.35);
+        J.head.set(-0.15, s * 0.25, 0);
+      } else {
+        J.shoulderL.set(s * 0.95 * tap - 0.25, 0, 0.3); J.elbowL.set(-1.5);
+        J.shoulderR.set(-s * 0.95 * tap - 0.25, 0, -0.3); J.elbowR.set(-1.5);
+      }
+      return { rootY: -0.09 + Math.abs(Math.sin(f * Math.PI)) * 0.07, lambda: 26 };
+    }
+    if (this.emote === 'buggin') {
+      // buggin' out: head shaking, arms flailing, grabbing the head in disbelief
+      const grab = (t % 1.7) < 0.65;
+      J.head.set(Math.sin(t * 19) * 0.18, Math.sin(t * 31) * 0.45, Math.sin(t * 23) * 0.22);
+      J.neck.set(0.1 + Math.sin(t * 13) * 0.12);
+      J.spine.set(0.18 + Math.sin(t * 11) * 0.12, Math.sin(t * 7.3) * 0.35, Math.sin(t * 9.1) * 0.15);
+      J.hips.set(0, Math.sin(t * 7.3 + 1) * -0.2, Math.sin(t * 12) * 0.08);
+      if (grab) {
+        J.shoulderL.set(-2.5 + Math.sin(t * 29) * 0.12, 0, 0.95); J.elbowL.set(-2.0 + Math.sin(t * 25) * 0.2);
+        J.shoulderR.set(-2.5 + Math.sin(t * 27) * 0.12, 0, -0.95); J.elbowR.set(-2.0 + Math.sin(t * 22) * 0.2);
+      } else {
+        J.shoulderL.set(-1.4 + Math.sin(t * 14) * 1.2, 0, 0.9 + Math.sin(t * 9.7) * 0.6); J.elbowL.set(-1.1 + Math.sin(t * 17) * 0.9);
+        J.shoulderR.set(-1.4 + Math.sin(t * 15.5 + 2) * 1.2, 0, -0.9 - Math.sin(t * 10.3) * 0.6); J.elbowR.set(-1.1 + Math.sin(t * 16 + 1) * 0.9);
+      }
+      const j = Math.sin(t * 12);
+      J.kneeL.set(0.35 + Math.max(0, j) * 0.45); J.kneeR.set(0.35 + Math.max(0, -j) * 0.45);
+      J.hipL.set(-0.15 - Math.max(0, j) * 0.3, 0, 0.12); J.hipR.set(-0.15 - Math.max(0, -j) * 0.3, 0, -0.12);
+      J.ankleL.set(0.15); J.ankleR.set(0.15);
+      return { rootY: -0.07 + Math.abs(Math.sin(t * 12)) * 0.05, lambda: 30 };
+    }
+    if (this.emote === 'robot') {
+      // the robot: snappy, quantised poses
+      const q = Math.floor(t / 0.36) % 6;
+      const P = [
+        [0.6, 0, -1.57, 0, 0, 0], [0.6, 0.5, -1.57, -0.5, -0.4, 0.2], [0, 0.5, 0, -1.57, -0.4, 0.2],
+        [-0.6, -0.5, -1.57, -1.57, 0.4, -0.2], [0, 0, -1.57, 0, 0.4, -0.2], [-0.6, 0, 0, -1.57, 0, 0],
+      ][q];
+      J.head.set(0, P[0], 0);
+      J.spine.set(0, P[1] * 0.5, 0);
+      J.shoulderL.set(-0.1, 0, 0.35); J.elbowL.set(P[2]);
+      J.shoulderR.set(-0.1, 0, -0.35); J.elbowR.set(P[3]);
+      J.hips.set(0, P[4], 0);
+      J.kneeL.set(0.12 + Math.max(0, P[5])); J.kneeR.set(0.12 + Math.max(0, -P[5]));
+      return { rootY: -0.03, lambda: 38 };
+    }
     if (this.emote === 'wave') {
       J.spine.set(0, 0, 0.05);
       J.shoulderL.set(0.05, 0, 0.12); J.elbowL.set(-0.2);
@@ -709,6 +885,7 @@ export class CharacterModel {
       J.head.set(-0.15 * k, 0, 0);
       J.kneeL.set(0.25); J.kneeR.set(0.25); J.hipL.set(-0.1, 0, 0.25); J.hipR.set(-0.1, 0, -0.25);
     }
+    return {};
   }
 
   landed(speed) {
@@ -718,19 +895,46 @@ export class CharacterModel {
 
   dispose() {
     // free every per-character GPU resource (shared geometries are kept for the next model)
+    LIVE_MATS.delete(this.mats.body);
+    LIVE_MATS.delete(this.mats.joint);
     if (this.nameSprite) this.nameSprite.material.map.dispose();
     this.skeleton.dispose();
     disposeTree(this.root);
   }
 }
 
-const SHARED_GEOS = new Set([...Object.values(sharedGeo), stripeGeo]);
+const SHARED_GEOS = new Set(Object.values(sharedGeo));
+/** How long each emote plays (seconds) unless the player moves. */
+export const EMOTE_TIME = { wave: 2.6, dance: 3.2, flex: 2.2, griddy: 4.2, buggin: 3.6, robot: 3.6 };
 
 function disposeTree(obj) {
   obj.traverse((o) => {
     if (o.geometry && !SHARED_GEOS.has(o.geometry)) o.geometry.dispose();
     if (o.material) for (const m of Array.isArray(o.material) ? o.material : [o.material]) m.dispose();
   });
+}
+
+const glitchTex = [];
+/** "?", "!" and "?" with a chromatic split, for the scrambled marker. */
+function glitchTexture(i) {
+  if (glitchTex[i]) return glitchTex[i];
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const x = c.getContext('2d');
+  x.font = '900 52px "Segoe UI", system-ui, sans-serif';
+  x.textAlign = 'center';
+  x.textBaseline = 'middle';
+  const ch = i === 1 ? '!' : '?';
+  x.fillStyle = '#ff3df0';
+  x.fillText(ch, 29, 33);
+  x.fillStyle = '#3df5ff';
+  x.fillText(ch, 35, 31);
+  x.fillStyle = '#7dff6b';
+  x.fillText(ch, 32, 32);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  glitchTex[i] = t;
+  return t;
 }
 
 function roundRect(ctx, x, y, w, h, r) {

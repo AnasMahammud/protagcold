@@ -665,6 +665,30 @@ class AbilityCoinServerTests(IntegrationTests):
         await asyncio.sleep(0.1)
         self.assertFalse(any(x.get("t") == "impulse" for x in b.inbox))
 
+    async def test_scramble_hits_players_in_range_and_sight(self):
+        m, a, b, _ = await self._match([["scramble", None], []])
+        await a.send({"t": "ability", "id": "scramble"})
+        msg = await b.wait_for(t_is("scramble"))
+        self.assertEqual(msg["by"], a.id)
+        self.assertEqual([h[0] for h in msg["hits"]], [b.id])  # b is 5 m away in the open
+        self.assertIn(msg["hits"][0][1], ("invert", "mirror", "spin"))
+        self.assertEqual(msg["dur"], CONFIG["abilities"]["scramble"]["duration"])
+        mine = await a.wait_for(t_is("scramble"))  # the caster hears about it too (to show who was hit)
+        self.assertEqual(mine["hits"], msg["hits"])
+        # out of range: nobody
+        m.ability_t[a.id].clear()
+        PerfectDodgeServerTests._place(self, m, b, [10.0, 0.0, -25.0], [0, 0, 0])
+        await a.send({"t": "ability", "id": "scramble"})
+        self.assertEqual((await b.wait_for(t_is("scramble")))["hits"], [])
+
+    async def test_new_emotes_are_relayed_unknown_ones_are_not(self):
+        m, a, b, _ = await self._match([[], []])
+        await a.send({"t": "emote", "e": "griddy"})
+        self.assertEqual((await b.wait_for(t_is("emote")))["e"], "griddy")
+        await a.send({"t": "emote", "e": "hack"})
+        await a.send({"t": "emote", "e": "buggin"})
+        self.assertEqual((await b.wait_for(t_is("emote")))["e"], "buggin")  # "hack" never arrived
+
     async def test_map_coins_are_server_owned(self):
         m, a, b, start = await self._match([[], []])
         coins = start["coins"]

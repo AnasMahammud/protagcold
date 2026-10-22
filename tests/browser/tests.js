@@ -942,6 +942,139 @@ suite('Abilities & coins', () => {
 });
 
 // --------------------------------------------------------------------------- settings & UI
+// --------------------------------------------------------------------------- v1.03: scramble, emotes, models, intro, motion blur
+const { scrambleStick, scrambleWorldInput, SCRAMBLE_MODES } = await import('../../src/gameplay/abilities.js');
+const { CharacterModel, EMOTE_TIME } = await import('../../src/player/characterModel.js');
+const { EMOTES, EMOTE_IDS } = await import('../../src/progression/cosmetics.js');
+const { DEFAULT_BINDINGS } = await import('../../src/core/settings.js');
+const { MatchIntro } = await import('../../src/gameplay/intro.js');
+const { MotionBlur } = await import('../../src/effects/motionBlur.js');
+
+suite('Scramble, emotes, characters, intro & motion blur', () => {
+  test('scramble remaps controls: inverted, mirrored (+ jump/slide swapped), spun 90°', () => {
+    const eq = (a, b, msg) => expect(Math.abs(a[0] - b[0]) < 1e-9 && Math.abs(a[1] - b[1]) < 1e-9, `${msg}: ${a}`);
+    eq(scrambleStick(0.3, 1, 'invert'), [-0.3, -1], 'invert');
+    eq(scrambleStick(0.3, 1, 'mirror'), [-0.3, 1], 'mirror');
+    eq(scrambleStick(0, 1, 'spin'), [1, 0], 'spin: forward goes right');
+    eq(scrambleStick(1, 0, 'spin'), [0, -1], 'spin: right goes back');
+    const inp = I(0.6, -0.8, { jumpPressed: true });
+    const inv = scrambleWorldInput(inp, 'invert', 1.1);
+    near(inv.mx, -0.6, 1e-9, 'world invert x');
+    near(inv.mz, 0.8, 1e-9, 'world invert z');
+    const mir = scrambleWorldInput(inp, 'mirror', 0);
+    expect(mir.slidePressed && !mir.jumpPressed, 'mirror swaps jump and slide');
+    near(Math.hypot(mir.mx, mir.mz), 1, 1e-9, 'mirror keeps the stick length');
+    const sp = scrambleWorldInput(inp, 'spin', 0.4);
+    near(sp.mx * inp.mx + sp.mz * inp.mz, 0, 1e-9, 'spin turns the direction 90°');
+    expect(SCRAMBLE_MODES.length === 3, 'three modes');
+  });
+  test('scramble (offline): hits players in range and in sight only, then wears off', () => {
+    const { m } = liveMatch(5);
+    const [a, b] = [...m.players.values()];
+    const w = m.world;
+    // a tall, thin wall to hide behind
+    const wall = w.colliders.find((c) => !c.invisible && !c.ramp && c.y0 <= 0.1 && c.y1 > 2.5 && Math.min(c.x1 - c.x0, c.z1 - c.z0) < 2 && Math.max(c.x1 - c.x0, c.z1 - c.z0) > 3);
+    expect(wall, 'found a wall');
+    const alongX = wall.x1 - wall.x0 < wall.z1 - wall.z0; // thin in x: stand either side of it in x
+    const mid = alongX ? (wall.z0 + wall.z1) / 2 : (wall.x0 + wall.x1) / 2;
+    const side = (s) => (alongX ? [s < 0 ? wall.x0 - 1.2 : wall.x1 + 1.2, mid] : [mid, s < 0 ? wall.z0 - 1.2 : wall.z1 + 1.2]);
+    const [ax, az] = side(-1), [bx, bz] = side(1);
+    a.spawn(ax, wall.y0, az, 0);
+    b.spawn(bx, wall.y0, bz, 0);
+    m.abilities.setLoadout(a, ['scramble']);
+    expect(m.abilities.use(a, 0, {}).ok, 'used');
+    expect(!m.abilities.isScrambled(b), 'not through a wall');
+    m.abilities.setLoadout(a, ['scramble']); // fresh cooldown
+    // somewhere 5 m away in the open, in plain sight
+    let spot = null;
+    for (let i = 0; i < 32 && !spot; i++) {
+      const ang = (i / 32) * Math.PI * 2, x = ax + Math.cos(ang) * 5, z = az + Math.sin(ang) * 5;
+      if (w.isFree(x, wall.y0 + 0.05, z, M.radius, M.height) && w.groundBelow(x, z, 0.2, wall.y0 + 0.5)?.y === wall.y0 && w.lineOfSight({ x: ax, y: wall.y0 + 1, z: az }, { x, y: wall.y0 + 1, z })) spot = [x, z];
+    }
+    expect(spot, 'found an open spot');
+    b.spawn(spot[0], wall.y0, spot[1], 0);
+    expect(m.abilities.use(a, 0, {}).ok && m.abilities.isScrambled(b), 'in range and in sight: scrambled');
+    expect(SCRAMBLE_MODES.includes(b.scrambleMode), `mode ${b.scrambleMode}`);
+    expect(!m.abilities.isScrambled(a), 'never yourself');
+    const inv = m.abilities.scrambledInput(b, I(1, 0));
+    expect(Math.abs(inv.mx - 1) + Math.abs(inv.mz) > 0.5, 'a scrambled bot gets remapped input');
+    for (let t = 0; t < cfg.abilities.scramble.duration + 0.05; t += DT) m.abilities.step(DT);
+    expect(!m.abilities.isScrambled(b), 'wears off after its duration');
+    m.dispose();
+  });
+  test('emotes: every emote has a key, a duration and a real pose (griddy, buggin, robot...)', () => {
+    expect(EMOTE_IDS.includes('griddy') && EMOTE_IDS.includes('buggin'), 'the new emotes exist');
+    const model = new CharacterModel({});
+    const idle = { x: 0, y: 0, z: 0, yaw: 0, vx: 0, vy: 0, vz: 0, state: MS.GROUND, grounded: true, sprinting: false, scriptProgress: 0, groundY: 0 };
+    for (let i = 0; i < 60; i++) model.update(idle, DT, i * DT);
+    const rest = model.joints.map((j) => j.cur.clone());
+    EMOTE_IDS.forEach((id, i) => {
+      expect(EMOTES[id] && EMOTE_TIME[id] > 1, `${id}: catalogue + duration`);
+      expect(DEFAULT_BINDINGS[`emote${i + 1}`]?.length, `${id}: key binding`);
+      model.playEmote(id);
+      let moved = 0;
+      for (let k = 0; k < 90; k++) {
+        model.update(idle, DT, 1 + k * DT);
+        for (const j of model.joints) expect(Number.isFinite(j.cur.x + j.cur.y + j.cur.z), `${id}: finite joints`);
+      }
+      model.joints.forEach((j, n) => (moved = Math.max(moved, j.cur.distanceTo(rest[n]))));
+      expect(model.emote === id && moved > 0.3, `${id}: actually animates (${moved.toFixed(2)})`);
+      model.emote = null;
+      for (let k = 0; k < 60; k++) model.update(idle, DT, 3 + k * DT);
+    });
+    model.playEmote('griddy');
+    model.update({ ...idle, vx: 3 }, DT, 5);
+    expect(model.emote === null, 'moving cancels an emote');
+    model.dispose();
+  });
+  test('character model: one skinned mesh, 3 materials, sensible size', () => {
+    const model = new CharacterModel({ primary: '#e9edf5', hat: 'cap' });
+    const m = model.mesh;
+    expect(m.isSkinnedMesh && m.material.length === 3 && m.geometry.groups.length === 3, 'one skinned mesh, three groups');
+    const n = m.geometry.attributes.position.count;
+    expect(n > 2000 && n < 12000, `${n} vertices`);
+    m.geometry.computeBoundingBox();
+    const bb = m.geometry.boundingBox;
+    expect(bb.min.y > -0.1 && bb.max.y > 1.75 && bb.max.y < 2.2, `height ${bb.min.y.toFixed(2)}..${bb.max.y.toFixed(2)}`);
+    expect(bb.max.x - bb.min.x < 0.9, `width ${(bb.max.x - bb.min.x).toFixed(2)}`);
+    current.note = `${n} vertices, ${(bb.max.y - bb.min.y).toFixed(2)} m tall`;
+    model.dispose();
+  });
+  for (const id of Object.keys(maps)) {
+    test(`${id}: the intro camera orbits in the open (and under indoor ceilings)`, () => {
+      const fake = { game: { map: { data: maps[id].data, world: maps[id].world, id } }, s: { local: null } };
+      MatchIntro.prototype._planOrbit.call(fake);
+      const o = fake.orbit;
+      const w = maps[id].world;
+      let free = 0;
+      for (let i = 0; i < 24; i++) {
+        const a = (i / 24) * Math.PI * 2;
+        if (w.isFree(o.cx + Math.cos(a) * o.r, o.h - 0.4, o.cz + Math.sin(a) * o.r, 0.4, 0.8)) free++;
+      }
+      expect(free >= 16, `${free}/24 orbit points in the open`);
+      const ceil = Math.min(Infinity, ...(maps[id].data.decor || []).filter((d) => d.t === 'ceiling').map((d) => d.y));
+      expect(o.h * 1.12 < ceil, `orbit ${o.h.toFixed(1)} m stays under the ceiling (${ceil})`);
+      current.note = `h ${o.h.toFixed(1)} m, r ${o.r.toFixed(1)} m${o.indoor ? ', indoor' : ''}`;
+    });
+  }
+  test('motion blur: only while the view turns or at speed, never across a camera cut', () => {
+    const mb = new MotionBlur();
+    const cam = new THREE.PerspectiveCamera(70, 16 / 9, 0.1, 100);
+    cam.updateMatrixWorld();
+    expect(!mb.update(cam, DT, 0, true), 'first frame: nothing to compare with');
+    expect(!mb.update(cam, DT, 0, true), 'still camera: off');
+    cam.rotation.y += 0.05; cam.updateMatrixWorld();
+    expect(mb.update(cam, DT, 0, true) && Math.abs(mb.u.uVel.value.x) > 0.002, 'turning: blur along the turn');
+    expect(Math.abs(mb.u.uVel.value.y) < 1e-6, 'no vertical smear for a pure yaw');
+    cam.rotation.y += 1.5; cam.updateMatrixWorld();
+    mb.update(cam, DT, 0, true);
+    expect(mb.u.uVel.value.length() === 0, 'a camera cut is not motion');
+    for (let i = 0; i < 60; i++) mb.update(cam, DT, 16, true);
+    expect(mb.pass.enabled && mb.u.uRadial.value > 0.02, 'radial streak at top speed');
+    expect(!mb.update(cam, DT, 16, false), 'setting off: never runs');
+  });
+});
+
 // --------------------------------------------------------------------------- map events & versions
 const { EventScheduler, eventMods, eventsForMap, EVENT_INFO } = await import('../../src/gameplay/mapEvents.js');
 const { VERSION, CHANGELOG } = await import('../../src/core/version.js');

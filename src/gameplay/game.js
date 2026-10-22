@@ -18,6 +18,7 @@ import { Effects } from '../effects/effects.js';
 import { audio } from '../audio/audio.js';
 import { createScreenFx } from '../effects/screenFx.js';
 import { PerfectDodgeDirector } from '../effects/perfectDodge.js';
+import { MotionBlur } from '../effects/motionBlur.js';
 import * as AFX from '../effects/abilityFx.js';
 
 export class Game {
@@ -42,6 +43,7 @@ export class Game {
     this._fpsN = 0;
     this.onFrame = null; // UI hook (HUD)
     this.screenFx = createScreenFx();
+    this.motionBlur = new MotionBlur();
     this.perfectFx = new PerfectDodgeDirector(this);
     this.fxComposer = null; // lightweight composer used for screen effects on presets without bloom
     this.dynScale = 1; // dynamic resolution factor (see _dynamicResolution)
@@ -81,6 +83,7 @@ export class Game {
     this.bloom = new UnrealBloomPass(new THREE.Vector2(Math.round(size.x * k), Math.round(size.y * k)), 0.55, 0.45, 0.82);
     composer.addPass(this.bloom);
     composer.addPass(new OutputPass());
+    composer.addPass(this.motionBlur.pass);
     composer.addPass(this.screenFx.pass);
     this.composer = composer;
   }
@@ -109,7 +112,7 @@ export class Game {
       });
     }
     if (this.composer) {
-      this.composer.passes = this.composer.passes.filter((p) => p !== this.screenFx.pass); // shared pass survives
+      this.composer.passes = this.composer.passes.filter((p) => p !== this.screenFx.pass && p !== this.motionBlur.pass); // shared passes survive
       this.composer.dispose?.();
     }
     this._setupComposer();
@@ -303,6 +306,12 @@ export class Game {
     }
   }
 
+  /** Motion blur: Settings → Graphics (not on Low), off with "Reduce flashing", only in matches. */
+  get motionBlurOn() {
+    const s = this.session;
+    return !!(settings.data.graphics.motionBlur && settings.data.graphics.quality !== 'low' && !settings.data.accessibility.reduceFlashing && s && !s.attract && !s.intro && !s.paused);
+  }
+
   _render(dt) {
     const fx = this.screenFx;
     const fxOn = fx.active;
@@ -310,20 +319,26 @@ export class Game {
       fx.u.uTime.value = this.time;
       fx.u.uAspect.value = this.camera.aspect;
     }
+    const local = this.session?.local;
+    const speed = local && !local.out ? Math.hypot(local.ctrl.vel.x, local.ctrl.vel.z) : 0;
+    const mbOn = this.motionBlur.update(this.camera, dt, speed, this.motionBlurOn);
     if (this.composer) {
       fx.pass.enabled = fxOn;
       this.composer.render(dt);
-    } else if (fxOn) {
+    } else if (fxOn || mbOn) {
+      // presets without bloom render straight to the screen; only frames that need a post
+      // effect (perfect-dodge cinematic, motion blur) go through this small composer
       if (!this.fxComposer) {
         const c = new EffectComposer(this.renderer);
         c.addPass(new RenderPass(this.scene, this.camera));
         c.addPass(new OutputPass());
+        c.addPass(this.motionBlur.pass);
+        c.addPass(fx.pass);
         c.setPixelRatio(this.renderer.getPixelRatio());
         c.setSize(window.innerWidth, window.innerHeight);
         this.fxComposer = c;
       }
-      if (!this.fxComposer.passes.includes(fx.pass)) this.fxComposer.addPass(fx.pass);
-      fx.pass.enabled = true;
+      fx.pass.enabled = fxOn;
       this.fxComposer.render(dt);
     } else {
       this.renderer.render(this.scene, this.camera);
