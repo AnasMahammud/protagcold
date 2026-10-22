@@ -1,6 +1,6 @@
 {
   "_comment": "Shared gameplay configuration. Read by the browser client (src/core/config.js) AND the Python server (server/config.py). Change values here, not in code.",
-  "version": "1.05",
+  "version": "1.06",
 
   "tick": {
     "_comment": "netSendHz: client movement updates AND server snapshots per second. Remote players are drawn interpDelayMs in the past at most; the client adapts the delay to the measured jitter (minInterpDelayMs..interpDelayMs).",

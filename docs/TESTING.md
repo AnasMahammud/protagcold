@@ -15,6 +15,12 @@ The browser page shows each result and exposes `window.__TEST_RESULTS__` for aut
 
 ## Latest results (development machine: Windows 11, Intel UHD GPU, Chromium)
 
+### v1.06: UI refresh (2026-10-22)
+
+- **Python: 82 / 82 passed** (no server changes). **Browser: 152 / 152 passed.** New: the main menu has the logo, ten buttons each with its slide-in index, the Battle Pass entry, Credits in the footer and the LIVE caption; the arena loading screen shows the arena name, mode, art, step and a tip, and works without an arena.
+- **Real client checks:** the main menu with the logo top-right over the live Toy Factory match, the player card and LIVE pill; a frame halfway through the slide-in (buttons cascading in from the left, logo gliding in from the right); the arena loading card (Splash Kingdom, Shrinking Zone); the boot screen at 70% with its tip; the Play screen with the new titles and solid panels (`backdrop-filter` is now `none`). As before, animations were stepped by hand because the test browser ran in the background.
+
+
 ### v1.05: victory and defeat screens (2026-10-22)
 
 - **Python: 82 / 82 passed** (nothing changed on the server).

@@ -2,7 +2,9 @@
 
 A fast 3D parkour tag game. Vault, slide, mantle, wall-jump and dodge across seven arenas, from neon rooftops to an overgrown abandoned mall, a giant waterpark and a toy factory. Play six modes (including Hot Potato and Shrinking Zone) offline against bots, or online against friends through the included authoritative server.
 
-**Current version: v1.05.** The first time you open a new version, a *What's new* screen lists the changes (you can reopen it from the main menu).
+**Current version: v1.06.** The first time you open a new version, a *What's new* screen lists the changes (you can reopen it from the main menu).
+
+The main menu floats over a live bot match (a *LIVE* tag says which arena they're on), with the big PRO TAG logo in the top-right corner and the menu sliding in from the left. Loading screens show tips; loading into a match shows the arena, its mode and description.
 
 Every match opens with a short cutscene: the camera circles the arena with its name, the mode and who's playing, then swoops down behind you for the countdown. Any key or a click skips it.
 
@@ -248,7 +250,7 @@ src/
   audio/        synthesised SFX engine + procedural music sequencer
   progression/  XP/levels/stats, cosmetics catalogue, Battle Pass (battlepass.js)
   ui/           menus (incl. the Abilities shop), HUD, touch controls, ability icons,
-                character preview, victory / defeat screens (endScreen.js), stylesheet
+                character preview, victory / defeat screens (endScreen.js), loading tips, stylesheet
 server/         Python stdlib server: HTTP + RFC 6455 WebSocket, rooms, match loop,
                 rules (port of src/gameplay/rules.js), movement validation, map collision
 tools/build_maps.py     map source -> assets/maps/*.json (run after editing maps)
@@ -271,10 +273,10 @@ See **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for the technical design an
 
 ```bash
 python -m unittest discover -s tests -v                      # 82 server, rules, integration, social, hosting, publishing, perfect-dodge, ability, coin, new-mode, map-event, map-feature and cosmetics tests
-# with the server running, open http://localhost:8080/tests/browser/   (150 browser tests)
+# with the server running, open http://localhost:8080/tests/browser/   (152 browser tests)
 ```
 
-Latest results: **82/82 Python tests** and **150/150 browser tests** passing. Details, the manual verification checklist, and what could not be tested are in **[docs/TESTING.md](docs/TESTING.md)**.
+Latest results: **82/82 Python tests** and **152/152 browser tests** passing. Details, the manual verification checklist, and what could not be tested are in **[docs/TESTING.md](docs/TESTING.md)**.
 
 ## Requirements and performance
 

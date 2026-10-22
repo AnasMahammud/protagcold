@@ -1,8 +1,27 @@
 // Game version + update history. Every update bumps VERSION and adds an entry at the TOP of
 // CHANGELOG: the first time a player opens a new version, the "What's new" screen shows it.
-export const VERSION = '1.05';
+export const VERSION = '1.06';
 
 export const CHANGELOG = [
+  {
+    version: '1.06',
+    date: '2026-10-22',
+    title: 'A fresh new look',
+    sections: [
+      ['Main menu', [
+        'The big PRO TAG logo now sits in the top-right corner, so you can watch the bots playing behind the menu. A LIVE tag shows which arena they are on.',
+        'The menu buttons slide in one after another, and the logo and player card glide in from the right.',
+      ]],
+      ['Loading screens', [
+        'A new start-up screen: speed streaks, the logo sweeping in, a glowing progress bar with a percentage, and rotating gameplay tips.',
+        'Loading into a match now shows the arena (its art, name, mode and description) with a tip while it gets ready.',
+      ]],
+      ['Smoother UI', [
+        'Every screen slides in and its panels rise into place; titles get a sporty accent and buttons a shine.',
+        'Menus are lighter on your graphics card: the blurred see-through panels are now solid, which costs nothing over the live 3D background.',
+      ]],
+    ],
+  },
   {
     version: '1.05',
     date: '2026-10-22',

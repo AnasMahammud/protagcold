@@ -21,9 +21,17 @@
   <div id="touch" class="hidden"></div>
   <div id="toasts"></div>
   <div id="loading">
-    <h1 class="logo">Pro Tag<span>Chase · Evade · Tag</span></h1>
-    <div class="bar"><i id="load-bar"></i></div>
-    <div class="msg" id="load-msg">Loading…</div>
+    <div class="ld-stripes" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+    <div class="ld-center">
+      <h1 class="logo ld-logo">Pro Tag</h1>
+      <div class="ld-tag">Chase · Evade · Tag</div>
+      <div class="ld-progress">
+        <div class="ld-bar"><i id="load-bar"><b></b></i></div>
+        <div class="ld-row"><span id="load-msg">Loading…</span><span id="load-pct">0%</span></div>
+      </div>
+      <div class="ld-tip"><span>TIP</span><em id="load-tip"></em></div>
+    </div>
+    <div class="ld-ver" id="load-ver"></div>
   </div>
   <noscript>PRO TAG needs JavaScript enabled.</noscript>
   <script type="module" src="src/main.js"></script>

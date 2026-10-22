@@ -8,13 +8,29 @@ import { TouchControls } from './ui/touch.js';
 import { net } from './multiplayer/netClient.js';
 import { audio } from './audio/audio.js';
 import { progression } from './progression/progression.js';
+import { VERSION } from './core/version.js';
+import { TIPS } from './ui/tips.js';
 
 const bar = document.getElementById('load-bar');
 const msg = document.getElementById('load-msg');
+const pct = document.getElementById('load-pct');
+const tip = document.getElementById('load-tip');
+document.getElementById('load-ver').textContent = `v${VERSION}`;
 const progress = (p, text) => {
   bar.style.width = `${Math.round(p * 100)}%`;
+  pct.textContent = `${Math.round(p * 100)}%`;
   if (text) msg.textContent = text;
 };
+// rotating tips while it loads
+let tipN = Math.floor(Math.random() * TIPS.length);
+tip.textContent = TIPS[tipN];
+const tipTimer = setInterval(() => {
+  tipN = (tipN + 1) % TIPS.length;
+  tip.classList.remove('in');
+  void tip.offsetWidth; // restart the fade-in
+  tip.textContent = TIPS[tipN];
+  tip.classList.add('in');
+}, 3200);
 
 async function boot() {
   progress(0.1, 'Loading configuration…');
@@ -56,8 +72,9 @@ async function boot() {
   window.addEventListener('keydown', unlock);
 
   const loading = document.getElementById('loading');
-  loading.style.opacity = '0';
-  setTimeout(() => loading.remove(), 500);
+  clearInterval(tipTimer);
+  loading.classList.add('done'); // slides away to reveal the menu
+  setTimeout(() => loading.remove(), 700);
 
   // handy for debugging from the console and for automated browser tests
   window.PROTAG = { game, ui, input, net, settings };

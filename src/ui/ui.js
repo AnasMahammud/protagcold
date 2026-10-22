@@ -15,6 +15,7 @@ import { formatSeconds } from '../core/mathUtil.js';
 import { Hud, esc } from './hud.js';
 import { CharacterPreview } from './preview.js';
 import { EndScreenFx, animateResults } from './endScreen.js';
+import { randomTip } from './tips.js';
 import { friends } from '../multiplayer/friends.js';
 import { ABILITY_IDS, ABILITY_INFO } from '../gameplay/abilities.js';
 import { abilityIcon, COIN_SVG } from './abilityIcons.js';
@@ -201,6 +202,7 @@ export class UI {
       if (!this.inMatch) {
         this.game.setSession(m);
         this._envAudio(mapId, true);
+        this._liveLabel();
       } else {
         m.dispose();
       }
@@ -209,6 +211,15 @@ export class UI {
     } finally {
       this.attractBusy = false;
     }
+  }
+
+  /** The main menu's "LIVE" caption: which arena the bots behind the menu are playing on. */
+  _liveLabel() {
+    const el = this.root.querySelector('.mm-live');
+    if (!el) return;
+    const on = !!this.game.session?.attract && !!this.game.map;
+    el.classList.toggle('on', on);
+    if (on) el.querySelector('b').textContent = this._mapName(this.game.map.id);
   }
 
   _envAudio(mapId, menu) {
@@ -380,7 +391,7 @@ export class UI {
   async startOffline(opts) {
     audio.unlock();
     const token = ++this.matchToken;
-    this.loading('Loading arena…');
+    this.loading('Loading arena…', { mapId: opts.mapId, mode: opts.mode });
     try {
       this.inMatch = true;
       this.inMatchOnline = false;
@@ -403,7 +414,7 @@ export class UI {
 
   async onOnlineMatchStart(msg) {
     const token = ++this.matchToken;
-    this.loading(`Loading ${this._mapName(msg.map)}…`);
+    this.loading(`Loading ${this._mapName(msg.map)}…`, { mapId: msg.map, mode: msg.mode });
     try {
       this.inMatch = true;
       this.inMatchOnline = true;
@@ -427,7 +438,10 @@ export class UI {
   async _enterMatch() {
     const s = this.game.session;
     if (this.current !== 'loading') this.loading('Getting ready…');
-    else this.root.querySelector('.label').textContent = 'Getting ready…';
+    else {
+      const step = this.root.querySelector('.ld-msg');
+      if (step) step.textContent = 'Warming up…';
+    }
     // offline: hold the countdown while shaders compile behind the loading screen
     const offline = !this.inMatchOnline;
     if (offline && s) s.paused = true;
@@ -453,9 +467,25 @@ export class UI {
     this.input.requestPointerLock();
   }
 
-  loading(msg) {
+  /** Loading screen; with { mapId, mode } it shows the arena that's loading. */
+  loading(msg, info = null) {
     this.current = 'loading';
-    this.root.innerHTML = `<div class="screen center dim"><div class="stack" style="align-items:center"><div class="spinner"></div><div class="label" style="margin-top:12px">${esc(msg)}</div></div></div>`;
+    const map = info?.mapId ? this.maps.find((m) => m.id === info.mapId) : null;
+    const mode = info?.mode ? getConfig().modes[info.mode]?.name : null;
+    this.root.innerHTML = `
+    <div class="screen loading-screen">
+      <div class="ld-stripes" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+      <div class="ls-card">
+        ${map ? `<div class="ls-art map-swatch ${esc(map.theme)}"></div>` : ''}
+        <div class="ls-info">
+          ${mode ? `<div class="ls-mode">${esc(mode)}</div>` : ''}
+          <div class="ls-map">${esc(map ? map.name : 'PRO TAG')}</div>
+          ${map ? `<div class="ls-desc">${esc(map.description)}</div>` : ''}
+          <div class="ls-step"><span class="ls-spin"></span><span class="ld-msg">${esc(msg)}</span></div>
+        </div>
+      </div>
+      <div class="ld-tip ls-tip"><span>TIP</span><em>${esc(randomTip())}</em></div>
+    </div>`;
   }
 
   pause() {
@@ -972,22 +1002,27 @@ export class UI {
   screen_main() {
     const p = progression.profile;
     const need = xpForLevel(p.level, getConfig().progression);
+    const item = (i, attrs, label, extra = '', cls = '') => `<button class="btn menu-item ${cls}" style="--i:${i}" ${attrs}><span class="t">${label}</span>${extra}</button>`;
+    const claim = BP.claimable(p).length;
     return `
     <div class="screen menu-main">
-      <h1 class="logo">Pro Tag<span>Chase · Evade · Tag</span></h1>
-      <p class="tagline">Fast parkour tag across neon rooftops, an overgrown mall, a giant waterpark, a toy factory and more. Vault, slide, wall-jump — and don't get caught.</p>
-      <div class="menu-list">
-        <button class="btn menu-item primary" data-action="play"><span class="t">▶&nbsp; Play</span></button>
-        <button class="btn menu-item" data-action="practice"><span class="t">Practice</span></button>
-        <button class="btn menu-item" data-action="friendsScreen"><span class="t">Friends</span><span class="badge ready friends-online"></span></button>
-        <button class="btn menu-item" data-action="goto" data-target="abilities"><span class="t">Abilities</span><span class="coin-chip">${COIN_SVG}${progression.coins}</span></button>
-        <button class="btn menu-item pass-item" data-action="goto" data-target="pass"><span class="t">★ Battle Pass</span><span class="pass-chip">Tier ${BP.tierOf(progression.pass.xp).tier}${BP.claimable(p).length ? ` · <b>${BP.claimable(p).length} to claim</b>` : ''}</span></button>
-        <button class="btn menu-item" data-action="goto" data-target="customise"><span class="t">Customise</span></button>
-        <button class="btn menu-item" data-action="goto" data-target="profile"><span class="t">Profile</span></button>
-        <button class="btn menu-item" data-action="goto" data-target="settings"><span class="t">Settings</span></button>
-        <button class="btn menu-item" data-action="goto" data-target="controls"><span class="t">Controls</span></button>
-        <button class="btn menu-item" data-action="goto" data-target="updates"><span class="t">What's new</span>${loadJSON('lastSeenVersion', null) !== VERSION ? '<span class="badge new-inline">NEW</span>' : `<span class="ver-chip">v${VERSION}</span>`}</button>
+      <div class="mm-logo">
+        <h1 class="logo">Pro Tag</h1>
+        <div class="mm-tag">Chase · Evade · Tag</div>
+        <p class="tagline">Fast parkour tag across neon rooftops, an overgrown mall, a giant waterpark, a toy factory and more. Vault, slide, wall-jump — and don't get caught.</p>
       </div>
+      <nav class="menu-list">
+        ${item(0, 'data-action="play"', '▶&nbsp; Play', '', 'primary')}
+        ${item(1, 'data-action="practice"', 'Practice')}
+        ${item(2, 'data-action="friendsScreen"', 'Friends', '<span class="badge ready friends-online"></span>')}
+        ${item(3, 'data-action="goto" data-target="abilities"', 'Abilities', `<span class="coin-chip">${COIN_SVG}${progression.coins}</span>`)}
+        ${item(4, 'data-action="goto" data-target="pass"', '★ Battle Pass', `<span class="pass-chip">Tier ${BP.tierOf(progression.pass.xp).tier}${claim ? ` · <b>${claim} to claim</b>` : ''}</span>`, 'pass-item')}
+        ${item(5, 'data-action="goto" data-target="customise"', 'Customise')}
+        ${item(6, 'data-action="goto" data-target="profile"', 'Profile')}
+        ${item(7, 'data-action="goto" data-target="settings"', 'Settings')}
+        ${item(8, 'data-action="goto" data-target="controls"', 'Controls')}
+        ${item(9, 'data-action="goto" data-target="updates"', "What's new", loadJSON('lastSeenVersion', null) !== VERSION ? '<span class="badge new-inline">NEW</span>' : `<span class="ver-chip">v${VERSION}</span>`)}
+      </nav>
       <div class="player-card panel">
         <div class="label">Player</div>
         <div class="row between"><div class="name">${esc(settings.data.player.name)}</div><div class="badge you">LVL ${p.level}</div></div>
@@ -996,8 +1031,13 @@ export class UI {
         <div class="row between" style="margin-top:6px;font-size:12px;color:var(--muted)"><span>${p.xp} / ${need} XP</span><span>${p.stats.wins} wins · ${p.stats.tags} tags</span></div>
         <div class="row between" style="margin-top:8px"><span class="coin-chip big">${COIN_SVG}${progression.coins}</span><span class="loadout-mini">${progression.loadout.map((id, i) => `<i title="${id ? ABILITY_INFO[id] && getConfig().abilities[id].name : 'Empty slot'}" style="--c:${id ? ABILITY_INFO[id].color : '#555'}">${id ? abilityIcon(id) : ''}<b>${i ? 'R' : 'F'}</b></i>`).join('')}</span></div>
       </div>
+      <div class="mm-live"><i></i>LIVE · bots playing on <b></b></div>
       <div class="version">PRO TAG v${VERSION} · <button class="link-btn" data-action="goto" data-target="credits">Credits</button> · ${esc(this.game.glInfo || '')}</div>
     </div>`;
+  }
+
+  bind_main() {
+    this._liveLabel();
   }
 
   screen_play() {

@@ -1245,6 +1245,31 @@ suite('Victory & defeat screens', () => {
   });
 });
 
+// --------------------------------------------------------------------------- menu & loading (v1.06)
+suite('Main menu & loading screens', () => {
+  test('main menu: logo top-right, ten items that slide in one after another, the LIVE caption', () => {
+    const fake = { game: { glInfo: '', session: null, map: null }, maps: mapIndex };
+    const box = document.createElement('div');
+    box.innerHTML = UI.prototype.screen_main.call(fake);
+    const items = [...box.querySelectorAll('.menu-list .menu-item')];
+    expect(box.querySelector('.mm-logo .logo')?.textContent.trim() === 'Pro Tag', 'the logo');
+    expect(items.length === 10, `${items.length} items`);
+    expect(items.every((el, i) => el.style.getPropertyValue('--i') === String(i)), 'each item has its stagger index');
+    expect(items.some((el) => el.dataset.target === 'pass') && box.querySelector('[data-target="credits"]'), 'Battle Pass item, Credits in the footer');
+    expect(box.querySelector('.mm-live b'), 'LIVE caption');
+  });
+  test('arena loading screen shows the arena, the mode and a tip', () => {
+    const fake = { maps: mapIndex, root: document.createElement('div') };
+    UI.prototype.loading.call(fake, 'Loading arena…', { mapId: 'waterpark', mode: 'zone' });
+    const r = fake.root;
+    expect(r.querySelector('.ls-map').textContent === mapIndex.find((m) => m.id === 'waterpark').name, 'arena name');
+    expect(r.querySelector('.ls-mode').textContent === cfg.modes.zone.name && r.querySelector('.ls-art.waterpark'), 'mode + art');
+    expect(r.querySelector('.ld-msg').textContent === 'Loading arena…' && r.querySelector('.ld-tip em').textContent.length > 10, 'step + tip');
+    UI.prototype.loading.call(fake, 'Connecting…');
+    expect(r.querySelector('.ls-map').textContent === 'PRO TAG' && !r.querySelector('.ls-art'), 'works without an arena too');
+  });
+});
+
 // --------------------------------------------------------------------------- map events & versions
 const { EventScheduler, eventMods, eventsForMap, EVENT_INFO } = await import('../../src/gameplay/mapEvents.js');
 const { VERSION, CHANGELOG } = await import('../../src/core/version.js');
